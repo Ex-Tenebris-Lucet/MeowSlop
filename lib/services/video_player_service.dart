@@ -27,6 +27,8 @@ class YoutubePlayerService implements VideoPlayerService {
           hideControls: !showControls,
           forceHD: true,
           useHybridComposition: true,
+          showLiveFullscreenButton: false,
+          hideThumbnail: true,
         ),
       );
     } else {
@@ -49,6 +51,7 @@ class YoutubePlayerService implements VideoPlayerService {
         bufferedColor: Colors.white54,
         backgroundColor: Colors.black45,
       ),
+      thumbnail: Container(), // Empty thumbnail to keep showing video frame
       bottomActions: showControls ? null : const [], // Show default controls when showControls is true
     );
   }

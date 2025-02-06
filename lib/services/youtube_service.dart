@@ -13,6 +13,7 @@ class YoutubeService {
   Future<List<YouTubeVideo>> searchCatVideos({
     String query = 'cute cats',
     List<String> tags = const ['cats', 'kittens', 'funny cats'],
+    bool randomize = true,
   }) async {
     try {
       // Combine query with tags for better results
@@ -20,7 +21,7 @@ class YoutubeService {
       final videos = await _yt.search(searchQuery);
       
       // Filter out any non-cat content (basic filtering)
-      return videos.where((video) {
+      var filteredVideos = videos.where((video) {
         final title = video.title.toLowerCase() ?? '';
         final description = video.description?.toLowerCase() ?? '';
         return tags.any((tag) => 
@@ -28,6 +29,13 @@ class YoutubeService {
           description.contains(tag.toLowerCase())
         );
       }).toList();
+
+      // Randomize the order if requested
+      if (randomize) {
+        filteredVideos.shuffle();
+      }
+      
+      return filteredVideos;
     } catch (e) {
       print('Error fetching cat videos: $e');
       return [];
@@ -36,35 +44,44 @@ class YoutubeService {
 
   Future<List<YouTubeVideo>> getTrendingCatVideos() async {
     return searchCatVideos(
-      query: '#shorts trending cats',
-      tags: ['cats', 'viral cats', 'popular cats', 'shorts'],
+      query: '#shorts cats',
+      tags: ['cat', 'kitten', 'cats'], // Keep it simple and natural
     );
   }
 
   Future<List<YouTubeVideo>> getVoidCatVideos() async {
     return searchCatVideos(
-      query: '#shorts void cats black cats',
-      tags: ['void cat', 'black cat', 'ninja cat', 'shorts'],
+      query: '#shorts black cats',
+      tags: ['black cat', 'void cat'], // More focused tags
     );
   }
 
   Future<List<YouTubeVideo>> getCatShorts() async {
+    // Mix of different search terms for variety
+    final searchTypes = [
+      {'query': '#shorts cats', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts cat compilation', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts cats being cats', 'tags': <String>['cat', 'kitten']},
+    ];
+    
+    // Randomly select a search type
+    final searchType = searchTypes[DateTime.now().millisecondsSinceEpoch % searchTypes.length];
+    
     return searchCatVideos(
-      query: '#shorts cat shorts',
-      tags: ['cats', 'shorts', 'viral cats'],
+      query: searchType['query'] as String,
+      tags: (searchType['tags'] as List<String>),
     ).then((videos) {
-      // Try to filter for actual Shorts (usually < 60s and vertical aspect ratio)
+      // Filter for actual Shorts (usually < 60s)
       return videos.where((video) {
         final duration = video.duration ?? '';
-        // Parse duration string (usually in format "0:58" or "1:30")
         final parts = duration.split(':');
-        if (parts.length != 2) return true; // Include if we can't parse duration
+        if (parts.length != 2) return true;
         
         final minutes = int.tryParse(parts[0]) ?? 0;
         final seconds = int.tryParse(parts[1]) ?? 0;
         final totalSeconds = minutes * 60 + seconds;
         
-        return totalSeconds <= 60; // Only include videos <= 60 seconds
+        return totalSeconds <= 60;
       }).toList();
     });
   }
