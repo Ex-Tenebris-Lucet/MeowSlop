@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:ui' as ui;
-import 'package:youtube_api/youtube_api.dart';
-import '../services/youtube_service.dart';
-import '../services/video_player_service.dart';
-import '../main.dart'; // For our theme colors
+import '../services/giphy_service.dart';
+import '../main.dart';
 import 'dart:async';
 
 class VideoFeedScreen extends StatefulWidget {
@@ -14,34 +12,71 @@ class VideoFeedScreen extends StatefulWidget {
 }
 
 class _VideoFeedScreenState extends State<VideoFeedScreen> {
-  final _youtubeService = YoutubeService();
-  List<YouTubeVideo> _videos = [];
+  final _giphyService = GiphyService();
+  List<GiphyGif> _gifs = [];
   bool _isLoading = true;
   String? _error;
+  int _currentIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _loadVideos();
+    _loadGifs();
   }
 
-  Future<void> _loadVideos() async {
+  Future<void> _loadGifs() async {
     try {
-      setState(() {
-        _isLoading = true;
-        _error = null;
-      });
+      final gifs = await _giphyService.getGifs(limit: 3);
       
-      final videos = await _youtubeService.getCatShorts();
-      setState(() {
-        _videos = videos;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _gifs = gifs;
+          _isLoading = false;
+        });
+
+        // Start preloading next GIF if available
+        if (gifs.length > 1) {
+          _giphyService.preloadGif(gifs[1], context);
+        }
+      }
     } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadMoreGifs() async {
+    try {
+      final newGifs = await _giphyService.getGifs(
+        startIndex: _gifs.length,
+        limit: 3,
+      );
+      
+      if (mounted && newGifs.isNotEmpty) {
+        setState(() {
+          _gifs.addAll(newGifs);
+        });
+      }
+    } catch (e) {
+      print('Error loading more GIFs: $e');
+    }
+  }
+
+  void _onPageChanged(int index) {
+    setState(() => _currentIndex = index);
+    
+    // Load more GIFs if we're near the end
+    if (index >= _gifs.length - 2) {
+      _loadMoreGifs();
+    }
+    
+    // Preload next GIF
+    if (mounted && index < _gifs.length - 1) {
+      _giphyService.preloadGif(_gifs[index + 1], context);
     }
   }
 
@@ -54,11 +89,27 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
   }
 
   Widget _buildBody() {
-    if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(MeowColors.voidAccent),
-        ),
+    if (_gifs.isEmpty) {
+      return Stack(
+        children: [
+          // Show a static placeholder image or animation
+          const Center(
+            child: Icon(
+              Icons.pets,
+              size: 64,
+              color: MeowColors.voidAccent,
+            ),
+          ),
+          // Show loading indicator on top
+          if (_isLoading)
+            const Positioned.fill(
+              child: Center(
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(MeowColors.voidAccent),
+                ),
+              ),
+            ),
+        ],
       );
     }
 
@@ -68,13 +119,13 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              'Error loading videos: $_error',
+              'Error loading GIFs: $_error',
               style: const TextStyle(color: MeowColors.voidAccent),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: _loadVideos,
+              onPressed: _loadGifs,
               child: const Text('Try Again'),
             ),
           ],
@@ -82,162 +133,149 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
       );
     }
 
-    if (_videos.isEmpty) {
-      return const Center(
-        child: Text(
-          'No videos found 😿',
-          style: TextStyle(color: MeowColors.voidAccent),
-        ),
-      );
-    }
-
     return PageView.builder(
       scrollDirection: Axis.vertical,
-      itemCount: _videos.length,
+      itemCount: _gifs.length + 1,
+      onPageChanged: _onPageChanged,
       itemBuilder: (context, index) {
-        return VideoCard(video: _videos[index]);
+        if (index >= _gifs.length) {
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(MeowColors.voidAccent),
+            ),
+          );
+        }
+        return GifCard(
+          gif: _gifs[index],
+          isVisible: index == _currentIndex,
+        );
       },
     );
   }
 }
 
-class VideoCard extends StatefulWidget {
-  final YouTubeVideo video;
+class GifCard extends StatefulWidget {
+  final GiphyGif gif;
+  final bool isVisible;
 
-  const VideoCard({
+  const GifCard({
     super.key,
-    required this.video,
+    required this.gif,
+    required this.isVisible,
   });
 
   @override
-  State<VideoCard> createState() => _VideoCardState();
+  State<GifCard> createState() => _GifCardState();
 }
 
-class _VideoCardState extends State<VideoCard> {
-  final _videoPlayerService = YoutubePlayerService();
+class _GifCardState extends State<GifCard> {
   bool _showOverlay = false;
-  bool _needsBackground = false;
-  double _backgroundScale = 1.0;
-  ImageProvider? _processedBackground;
+  bool _isLoading = true;
+  bool _mounted = true;
 
   @override
   void initState() {
     super.initState();
-    _prepareBackground();
+    _mounted = true;
   }
 
-  Future<void> _prepareBackground() async {
-    // Load and decode the image
-    final imageProvider = NetworkImage(widget.video.thumbnail.high.url ?? '');
-    final imageStream = imageProvider.resolve(ImageConfiguration.empty);
-    final completer = Completer<ui.Image>();
-    
-    final listener = ImageStreamListener((info, _) {
-      completer.complete(info.image);
-    });
-    
-    imageStream.addListener(listener);
-    final image = await completer.future;
-    imageStream.removeListener(listener);
-
-    // Create a picture recorder and canvas
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    
-    // Draw the image with blur and color adjustments
-    final paint = Paint()
-      ..imageFilter = ui.ImageFilter.blur(sigmaX: 25.0, sigmaY: 25.0)
-      ..colorFilter = const ColorFilter.matrix([
-        0.9, 0, 0, 0, 0,
-        0, 0.9, 0, 0, 0,
-        0, 0, 0.9, 0, 0,
-        0, 0, 0, 1, 0,
-      ]);
-    
-    canvas.drawImage(image, Offset.zero, paint);
-    
-    // Convert to an image
-    final processedImage = await recorder.endRecording()
-        .toImage(image.width, image.height);
-    final byteData = await processedImage.toByteData(format: ui.ImageByteFormat.png);
-    
-    if (mounted && byteData != null) {
-      setState(() {
-        _processedBackground = MemoryImage(byteData.buffer.asUint8List());
-      });
-    }
-  }
-
-  void _toggleOverlay() {
-    setState(() {
-      _showOverlay = !_showOverlay;
-    });
-    if (widget.video.id != null) {
-      _videoPlayerService.togglePlayback(widget.video.id!);
+  @override
+  void didUpdateWidget(GifCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isVisible && !oldWidget.isVisible) {
+      // Card just became visible
+      setState(() => _isLoading = true);
     }
   }
 
   @override
   void dispose() {
-    _videoPlayerService.dispose();
+    _mounted = false;
     super.dispose();
+  }
+
+  void _setLoading(bool value) {
+    if (_mounted) {
+      setState(() => _isLoading = value);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: _toggleOverlay,
+      onTap: () => setState(() => _showOverlay = !_showOverlay),
       child: Container(
         width: MediaQuery.of(context).size.width,
         height: MediaQuery.of(context).size.height,
         color: Colors.black,
         child: Stack(
-          fit: StackFit.expand,
           children: [
-            // Static pre-processed background
-            if (_needsBackground && _processedBackground != null)
-              Transform.scale(
-                scale: _backgroundScale,
-                child: Image(
-                  image: _processedBackground!,
-                  fit: BoxFit.cover,
+            // Main GIF
+            Positioned.fill(
+              child: Image(
+                image: widget.gif.image,
+                fit: BoxFit.contain,
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _setLoading(false);
+                    });
+                    return child;
+                  }
+                  return const Center(
+                    child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(MeowColors.voidAccent),
+                    ),
+                  );
+                },
+                errorBuilder: (context, error, stackTrace) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    _setLoading(false);
+                  });
+                  print('Error loading GIF: $error');
+                  return const Center(
+                    child: Icon(
+                      Icons.error_outline,
+                      color: Colors.red,
+                      size: 48,
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            // Loading indicator
+            if (_isLoading)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.black45,
+                  child: const Center(
+                    child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(MeowColors.voidAccent),
+                    ),
+                  ),
                 ),
               ),
 
-            // Main video
-            if (widget.video.id != null)
-              Center(
-                child: AspectRatio(
-                  aspectRatio: 9 / 16, // Vertical aspect ratio for Shorts
-                  child: _videoPlayerService.buildPlayer(
-                    widget.video.id!,
-                    showControls: _showOverlay,
-                  ),
-                ),
-              )
-            else
-              Image.network(
-                widget.video.thumbnail.high.url ?? '',
-                fit: BoxFit.cover,
-              ),
-            
             // Overlay elements (only show when _showOverlay is true)
             if (_showOverlay) ...[
               // Gradient overlay
-              Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.center,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.transparent,
-                      Colors.black.withOpacity(0.7),
-                    ],
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.center,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withOpacity(0.7),
+                      ],
+                    ),
                   ),
                 ),
               ),
-              
-              // Video metadata
+
+              // GIF metadata
               Positioned(
                 left: 16,
                 right: 16,
@@ -246,9 +284,9 @@ class _VideoCardState extends State<VideoCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      widget.video.channelTitle ?? 'Unknown Channel',
-                      style: const TextStyle(
+                    const Text(
+                      'Via Giphy',
+                      style: TextStyle(
                         color: MeowColors.voidAccent,
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
@@ -256,7 +294,7 @@ class _VideoCardState extends State<VideoCard> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      widget.video.title ?? 'Untitled Video',
+                      widget.gif.title,
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 14,

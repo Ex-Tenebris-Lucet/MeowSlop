@@ -12,25 +12,72 @@ class YoutubeService {
 
   Future<List<YouTubeVideo>> searchCatVideos({
     String query = 'cute cats',
-    List<String> tags = const ['cats', 'kittens', 'funny cats'],
+    List<String> tags = const ['cats', 'kittens'],
     bool randomize = true,
   }) async {
     try {
-      // Combine query with tags for better results
       final searchQuery = '$query ${tags.join(' ')}';
       final videos = await _yt.search(searchQuery);
       
-      // Filter out any non-cat content (basic filtering)
+      // Much stricter filtering
       var filteredVideos = videos.where((video) {
-        final title = video.title.toLowerCase() ?? '';
+        final title = video.title?.toLowerCase() ?? '';
         final description = video.description?.toLowerCase() ?? '';
-        return tags.any((tag) => 
-          title.contains(tag.toLowerCase()) || 
-          description.contains(tag.toLowerCase())
-        );
+        final channelTitle = video.channelTitle?.toLowerCase() ?? '';
+
+        // Negative filters - skip if these appear
+        final blacklist = [
+          // Content type filters
+          'gacha', 'animation', 'minecraft', 'roblox', 'ai', 'artificial',
+          'subscribe', 'follow', 'tiktok compilation', '#shorts compilation',
+          'funny compilation', 'try not to laugh', 'satisfying', 'asmr',
+          'animation', 'cartoon', '3d', 'cgi', 'subscribe', 'merch',
+          
+          // Sad/disturbing content filters
+          'dead', 'died', 'dying', 'rip', 'rest in peace', 'rainbow bridge',
+          'crying', 'sad', 'rescue', 'help', 'emergency', 'sick', 'hospital',
+          'vet ', 'surgery', 'injury', 'injured', 'wound', 'hurt', 'pain',
+          'abuse', 'abandoned', 'neglect', 'starving', 'suffering',
+          'cancer', 'tumor', 'disease', 'infection', 'parasite',
+          'warning', 'graphic', 'disturbing', 'heartbreaking',
+          'last', 'goodbye', 'memorial', 'memory of', 'in loving memory',
+        ];
+
+        // Skip if title contains blacklisted terms
+        if (blacklist.any((term) => title.contains(term))) return false;
+        if (blacklist.any((term) => description.contains(term))) return false;
+
+        // Additional check for potentially sad content indicators
+        final sadIndicators = ['😢', '😭', '💔', '😿', '🙏'];
+        if (sadIndicators.any((emoji) => title.contains(emoji))) return false;
+
+        // Skip channels that are likely to post concerning content
+        if (channelTitle.contains('rescue') ||
+            channelTitle.contains('vet') ||
+            channelTitle.contains('emergency') ||
+            channelTitle.contains('shelter')) return false;
+
+        // Skip if title is ALL CAPS (usually clickbait)
+        if (title == title.toUpperCase() && title.contains(' ')) return false;
+
+        // Skip if title has too many emojis (usually clickbait)
+        final emojiCount = RegExp(r'[\u{1F300}-\u{1F9FF}]', unicode: true)
+            .allMatches(title)
+            .length;
+        if (emojiCount > 3) return false;
+
+        // Must contain happy/positive cat-related terms
+        final catTerms = ['cat', 'kitten', 'kitty'];
+        final hasPositiveTerms = [
+          'playing', 'happy', 'cute', 'funny', 'adorable', 'sweet',
+          'playful', 'loving', 'sleepy', 'cozy', 'comfy', 'purring'
+        ].any((term) => title.contains(term) || description.contains(term));
+
+        return catTerms.any((term) => 
+          title.contains(term) || description.contains(term)
+        ) && hasPositiveTerms;
       }).toList();
 
-      // Randomize the order if requested
       if (randomize) {
         filteredVideos.shuffle();
       }
@@ -57,11 +104,18 @@ class YoutubeService {
   }
 
   Future<List<YouTubeVideo>> getCatShorts() async {
-    // Mix of different search terms for variety
+    // Happy cat behaviors only
     final searchTypes = [
-      {'query': '#shorts cats', 'tags': <String>['cat', 'kitten']},
-      {'query': '#shorts cat compilation', 'tags': <String>['cat', 'kitten']},
-      {'query': '#shorts cats being cats', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts happy cat purring', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts playful cat toys', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts sleepy cat napping', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts cat playing string', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts cat cuddles love', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts cat toe beans', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts cat loaf relaxing', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts cat stretching yawn', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts cat making biscuits', 'tags': <String>['cat', 'kitten']},
+      {'query': '#shorts cat box sitting', 'tags': <String>['cat', 'kitten']},
     ];
     
     // Randomly select a search type

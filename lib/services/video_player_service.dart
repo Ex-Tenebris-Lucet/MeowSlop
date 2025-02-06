@@ -29,6 +29,7 @@ class YoutubePlayerService implements VideoPlayerService {
           useHybridComposition: true,
           showLiveFullscreenButton: false,
           hideThumbnail: true,
+          disableDragSeek: true,
         ),
       );
     } else {
@@ -53,6 +54,7 @@ class YoutubePlayerService implements VideoPlayerService {
       ),
       thumbnail: Container(), // Empty thumbnail to keep showing video frame
       bottomActions: showControls ? null : const [], // Show default controls when showControls is true
+      topActions: const [], // Hide top bar completely
     );
   }
   

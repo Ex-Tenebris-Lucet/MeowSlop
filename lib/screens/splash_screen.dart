@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/device_service.dart';
 import 'video_feed_screen.dart';
+import '../services/giphy_service.dart';
 
 class SplashScreen extends StatefulWidget {
   final DeviceService deviceService;
@@ -23,38 +24,41 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     
     // Setup the animations
     _controller = AnimationController(
-      duration: const Duration(seconds: 1), // Full second for movement
+      duration: const Duration(seconds: 1),
       vsync: this,
     );
 
-    // Use a more dramatic acceleration curve
     _positionAnimation = CurvedAnimation(
       parent: _controller,
-      curve: Curves.easeInExpo, // Much stronger acceleration
+      curve: Curves.easeInExpo,
     ).drive(Tween<double>(
       begin: 0.0,
-      end: -1, // Move up by 70% of screen height
+      end: -1,
     ));
 
-    // Sync fade with the movement
     _opacityAnimation = CurvedAnimation(
       parent: _controller,
-      curve: const Interval(0.0, 0.6, curve: Curves.easeIn), // Fade out earlier in the animation
+      curve: const Interval(0.0, 0.6, curve: Curves.easeIn),
     ).drive(Tween<double>(
       begin: 1.0,
       end: 0.0,
     ));
 
-    // One second static display
-    Future.delayed(const Duration(seconds: 1), () {
+    // Start GIF loading in background without awaiting
+    GiphyService().getGifs(limit: 50);  // Start loading GIFs in background
+    
+    // Start animation after a short delay
+    Future.delayed(const Duration(milliseconds: 500), () {
       if (mounted) {
         setState(() => _startAnimation = true);
         _controller.forward().then((_) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => const VideoFeedScreen(),
-            ),
-          );
+          if (mounted) {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (context) => const VideoFeedScreen(),
+              ),
+            );
+          }
         });
       }
     });
