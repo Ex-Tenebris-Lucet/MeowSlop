@@ -40,6 +40,10 @@ migrate_working_dir/
 .env.development
 .env.production
 
+# Google Services
+google-services.json
+**/android/app/google-services.json
+
 # Symbolication related
 app.*.symbols
 

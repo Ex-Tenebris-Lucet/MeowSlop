@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:youtube_api/youtube_api.dart';
+import 'package:video_player/video_player.dart';
 import '../services/youtube_service.dart';
 import '../main.dart'; // For our theme colors
 
@@ -98,7 +99,7 @@ class _VideoFeedScreenState extends State<VideoFeedScreen> {
   }
 }
 
-class VideoCard extends StatelessWidget {
+class VideoCard extends StatefulWidget {
   final YouTubeVideo video;
 
   const VideoCard({
@@ -107,20 +108,69 @@ class VideoCard extends StatelessWidget {
   });
 
   @override
+  State<VideoCard> createState() => _VideoCardState();
+}
+
+class _VideoCardState extends State<VideoCard> {
+  VideoPlayerController? _controller;
+  bool _isInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Start with a test video to verify the player works
+    _initializePlayer();
+  }
+
+  Future<void> _initializePlayer() async {
+    try {
+      // Using a test video URL for now
+      final controller = VideoPlayerController.network(
+        'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+      );
+
+      await controller.initialize();
+      if (mounted) {
+        setState(() {
+          _controller = controller;
+          _isInitialized = true;
+        });
+        // Auto-play when ready
+        controller.play();
+        // Loop the video
+        controller.setLooping(true);
+      }
+    } catch (e) {
+      print('Error initializing video player: $e');
+      // Fall back to thumbnail view
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       width: MediaQuery.of(context).size.width,
       height: MediaQuery.of(context).size.height,
-      decoration: BoxDecoration(
-        color: Colors.black,
-        image: DecorationImage(
-          image: NetworkImage(video.thumbnail.high.url ?? ''),
-          fit: BoxFit.cover,
-        ),
-      ),
+      color: Colors.black,
       child: Stack(
+        fit: StackFit.expand,
         children: [
-          // Gradient overlay for better text visibility
+          // Video or thumbnail
+          if (_isInitialized && _controller != null)
+            VideoPlayer(_controller!)
+          else
+            Image.network(
+              widget.video.thumbnail.high.url ?? '',
+              fit: BoxFit.cover,
+            ),
+          
+          // Gradient overlay
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -133,6 +183,7 @@ class VideoCard extends StatelessWidget {
               ),
             ),
           ),
+          
           // Video metadata
           Positioned(
             left: 16,
@@ -143,7 +194,7 @@ class VideoCard extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  video.channelTitle ?? 'Unknown Channel',
+                  widget.video.channelTitle ?? 'Unknown Channel',
                   style: const TextStyle(
                     color: MeowColors.voidAccent,
                     fontSize: 16,
@@ -152,7 +203,7 @@ class VideoCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  video.title ?? 'Untitled Video',
+                  widget.video.title ?? 'Untitled Video',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 14,
