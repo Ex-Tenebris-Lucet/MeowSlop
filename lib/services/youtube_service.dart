@@ -36,15 +36,36 @@ class YoutubeService {
 
   Future<List<YouTubeVideo>> getTrendingCatVideos() async {
     return searchCatVideos(
-      query: 'trending cats',
-      tags: ['cats', 'viral cats', 'popular cats'],
+      query: '#shorts trending cats',
+      tags: ['cats', 'viral cats', 'popular cats', 'shorts'],
     );
   }
 
   Future<List<YouTubeVideo>> getVoidCatVideos() async {
     return searchCatVideos(
-      query: 'void cats black cats',
-      tags: ['void cat', 'black cat', 'ninja cat'],
+      query: '#shorts void cats black cats',
+      tags: ['void cat', 'black cat', 'ninja cat', 'shorts'],
     );
+  }
+
+  Future<List<YouTubeVideo>> getCatShorts() async {
+    return searchCatVideos(
+      query: '#shorts cat shorts',
+      tags: ['cats', 'shorts', 'viral cats'],
+    ).then((videos) {
+      // Try to filter for actual Shorts (usually < 60s and vertical aspect ratio)
+      return videos.where((video) {
+        final duration = video.duration ?? '';
+        // Parse duration string (usually in format "0:58" or "1:30")
+        final parts = duration.split(':');
+        if (parts.length != 2) return true; // Include if we can't parse duration
+        
+        final minutes = int.tryParse(parts[0]) ?? 0;
+        final seconds = int.tryParse(parts[1]) ?? 0;
+        final totalSeconds = minutes * 60 + seconds;
+        
+        return totalSeconds <= 60; // Only include videos <= 60 seconds
+      }).toList();
+    });
   }
 } 
