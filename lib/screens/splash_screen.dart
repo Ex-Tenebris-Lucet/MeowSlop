@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/device_service.dart';
-import 'video_feed_screen.dart';
-import '../services/giphy_service.dart';
+import '../services/supabase_service.dart';
+import 'feed_screen.dart';
+// import '../services/giphy_service.dart';  // Commented out Giphy service
 
 class SplashScreen extends StatefulWidget {
   final DeviceService deviceService;
@@ -23,6 +24,13 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     super.initState();
     
     // Setup the animations
+    _setupAnimations();
+    
+    // Test connection and start animation when ready
+    _testConnectionAndAnimate();
+  }
+
+  void _setupAnimations() {
     _controller = AnimationController(
       duration: const Duration(seconds: 1),
       vsync: this,
@@ -43,25 +51,39 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
       begin: 1.0,
       end: 0.0,
     ));
+  }
 
-    // Start GIF loading in background without awaiting
-    GiphyService().getGifs(limit: 50);  // Start loading GIFs in background
-    
-    // Start animation after a short delay
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        setState(() => _startAnimation = true);
-        _controller.forward().then((_) {
-          if (mounted) {
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute(
-                builder: (context) => const VideoFeedScreen(),
-              ),
-            );
-          }
-        });
+  Future<void> _testConnectionAndAnimate() async {
+    try {
+      final success = await SupabaseService().testConnection();
+      print('Supabase connection test: ${success ? 'PASSED' : 'FAILED'}');
+      
+      if (!success) {
+        // In production, you might want to show an error message
+        // or retry the connection
+        print('Warning: Proceeding despite failed connection test');
       }
-    });
+    } catch (e) {
+      print('Error testing connection: $e');
+    }
+
+    // Proceed with animation after connection test
+    if (mounted) {
+      Future.delayed(const Duration(milliseconds: 1000), () {
+        if (mounted) {
+          setState(() => _startAnimation = true);
+          _controller.forward().then((_) {
+            if (mounted) {
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) => const FeedScreen(),
+                ),
+              );
+            }
+          });
+        }
+      });
+    }
   }
 
   @override
@@ -84,7 +106,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
               child: Opacity(
                 opacity: _startAnimation ? _opacityAnimation.value : 1.0,
                 child: const Text(
-                  'MeowSlop',
+                  'Meoẅslop',
                   style: TextStyle(
                     fontSize: 48,
                     fontWeight: FontWeight.bold,
@@ -99,35 +121,3 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     );
   }
 }
-
-class CatLoadingPainter extends CustomPainter {
-  final Animation<double> animation;
-
-  CatLoadingPainter({required this.animation}) : super(repaint: animation);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFFFFE66D)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
-
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width / 2) * animation.value;
-
-    // Draw cat ears (simple triangles for now)
-    final path = Path()
-      ..moveTo(center.dx - 15, center.dy)
-      ..lineTo(center.dx - 5, center.dy - 20)
-      ..lineTo(center.dx + 5, center.dy)
-      ..moveTo(center.dx + 15, center.dy)
-      ..lineTo(center.dx + 25, center.dy - 20)
-      ..lineTo(center.dx + 35, center.dy);
-
-    canvas.drawPath(path, paint);
-    canvas.drawCircle(center, 20, paint);
-  }
-
-  @override
-  bool shouldRepaint(CatLoadingPainter oldDelegate) => true;
-} 

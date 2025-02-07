@@ -1,0 +1,902 @@
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'signup_screen.dart';
+import 'login_screen.dart';
+import '../services/auth_service.dart';
+import '../widgets/video_player_widget.dart';
+import '../services/video_service.dart';
+
+class UserProfileScreen extends StatefulWidget {
+  const UserProfileScreen({super.key});
+
+  @override
+  State<UserProfileScreen> createState() => _UserProfileScreenState();
+}
+
+class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindingObserver {
+  final _authService = AuthService();
+  bool? _isLoggedIn;
+  Map<String, dynamic>? _profile;
+  bool _isEditing = false;
+  final _formKey = GlobalKey<FormState>();
+  final _usernameController = TextEditingController();
+  final _taglineController = TextEditingController();
+  List<Map<String, dynamic>>? _posts;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkLoginState();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _usernameController.dispose();
+    _taglineController.dispose();
+    VideoService().cleanup();  // Clean up video cache
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkLoginState();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    ModalRoute.of(context)?.addScopedWillPopCallback(() async {
+      _checkLoginState();
+      return true;
+    });
+  }
+
+  Future<void> _checkLoginState() async {
+    final loggedIn = await _authService.isLoggedIn();
+    if (mounted) {
+      setState(() {
+        _isLoggedIn = loggedIn;
+      });
+      if (loggedIn) {
+        _fetchProfile();
+      }
+    }
+  }
+
+  Future<void> _fetchProfile() async {
+    final profile = await _authService.getProfile();
+    if (mounted) {
+      setState(() {
+        _profile = profile;
+        if (!_isEditing) {
+          _usernameController.text = profile?['username'] ?? '';
+          _taglineController.text = profile?['tagline'] ?? '';
+        }
+      });
+      _fetchPosts();
+    }
+  }
+
+  Future<void> _logout() async {
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text(
+          'Logout',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'Are you sure you want to logout?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(
+              backgroundColor: Colors.white,
+            ),
+            child: const Text(
+              'Logout',
+              style: TextStyle(
+                color: Colors.black,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _authService.logout();
+      if (mounted) {
+        setState(() {
+          _isLoggedIn = false;
+          _profile = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveProfile() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    try {
+      await _authService.updateProfile(
+        username: _usernameController.text,
+        tagline: _taglineController.text.isEmpty ? null : _taglineController.text,
+      );
+      await _fetchProfile();
+      if (mounted) {
+        setState(() {
+          _isEditing = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile updated successfully')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating profile: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoggedIn == null) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Text(
+          _isLoggedIn! ? 'Profile' : 'Not Logged In',
+          style: const TextStyle(color: Colors.white),
+        ),
+        actions: _isLoggedIn!
+            ? [
+                if (_isEditing)
+                  IconButton(
+                    icon: const Icon(Icons.check, color: Colors.white),
+                    onPressed: _saveProfile,
+                  )
+                else
+                  IconButton(
+                    icon: const Icon(Icons.edit, color: Colors.white),
+                    onPressed: () => setState(() => _isEditing = true),
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.logout, color: Colors.white),
+                  onPressed: _logout,
+                ),
+              ]
+            : null,
+      ),
+      body: _isLoggedIn! ? _buildLoggedInView() : _buildAnonymousView(context),
+    );
+  }
+
+  Widget _buildAnonymousView(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text(
+            "You're not logged in",
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+            ),
+          ),
+          const SizedBox(height: 20),
+          // Sign Up Button
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                PageRouteBuilder(
+                  pageBuilder: (context, animation, secondaryAnimation) => 
+                    const SignupScreen(),
+                  transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                    const begin = Offset(1.0, 0.0);
+                    const end = Offset.zero;
+                    const curve = Curves.easeOutExpo;
+                    var tween = Tween(begin: begin, end: end)
+                        .chain(CurveTween(curve: curve));
+                    var offsetAnimation = animation.drive(tween);
+                    return SlideTransition(
+                      position: offsetAnimation,
+                      child: child,
+                    );
+                  },
+                  transitionDuration: const Duration(milliseconds: 100),
+                ),
+              );
+            },
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+              backgroundColor: Colors.white,
+            ),
+            child: const Text(
+              'Create an Account',
+              style: TextStyle(
+                color: Colors.black,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Login Button
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                PageRouteBuilder(
+                  pageBuilder: (context, animation, secondaryAnimation) => 
+                    const LoginScreen(),
+                  transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                    const begin = Offset(1.0, 0.0);
+                    const end = Offset.zero;
+                    const curve = Curves.easeOutExpo;
+                    var tween = Tween(begin: begin, end: end)
+                        .chain(CurveTween(curve: curve));
+                    var offsetAnimation = animation.drive(tween);
+                    return SlideTransition(
+                      position: offsetAnimation,
+                      child: child,
+                    );
+                  },
+                  transitionDuration: const Duration(milliseconds: 100),
+                ),
+              );
+            },
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+              side: const BorderSide(color: Colors.white),
+            ),
+            child: const Text(
+              'Log In',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLoggedInView() {
+    if (_profile == null) {
+      return const Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        await _fetchProfile();
+        await _fetchPosts();
+      },
+      color: Colors.white,
+      backgroundColor: Colors.grey[900],
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _buildProfilePicture(_isEditing),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '@${_profile!['username']}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Joined ${DateTime.parse(_profile!['created_at']).toString().split(' ')[0]}',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              Text(
+                _profile!['tagline'] ?? 'No bio yet',
+                style: TextStyle(
+                  color: _profile!['tagline'] != null ? Colors.white70 : Colors.white38,
+                  fontSize: 16,
+                  fontStyle: _profile!['tagline'] != null ? FontStyle.normal : FontStyle.italic,
+                ),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _buildStatColumn('Posts', _posts?.length.toString() ?? '0'),
+                  _buildStatColumn('Following', '0'),
+                  _buildStatColumn('Followers', '0'),
+                ],
+              ),
+              const SizedBox(height: 24),
+              // Add Post Button
+              Center(
+                child: TextButton.icon(
+                  onPressed: _addNewPost,
+                  icon: const Icon(Icons.add_circle, color: Colors.white, size: 28),
+                  label: const Text(
+                    'Add Post',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    side: const BorderSide(color: Colors.white24),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              _buildPostsGrid(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPostsGrid() {
+    if (_posts == null) {
+      // Initial loading
+      return const SizedBox(
+        height: 100,  // Give it some height so the spinner is visible
+        child: Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+          ),
+        ),
+      );
+    }
+
+    if (_posts!.isEmpty) {
+      // No posts state
+      return SizedBox(
+        height: 200,  // Give empty state some height
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.photo_library_outlined,
+                color: Colors.white38,
+                size: 48,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'No posts yet',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 16,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 2,
+        mainAxisSpacing: 2,
+      ),
+      itemCount: _posts!.length,
+      itemBuilder: (context, index) {
+        final post = _posts![index];
+        final isVideo = post['media_type'] == 'video';
+        final displayUrl = isVideo ? post['thumbnail_url'] ?? post['storage_path'] : post['storage_path'];
+
+        return GestureDetector(
+          onTap: () => _showPostDetails(post),
+          onLongPress: () => _showDeleteConfirmation(post),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Container(
+                color: Colors.grey[900],
+                child: Image.network(
+                  displayUrl,
+                  fit: BoxFit.cover,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return Container(
+                      color: Colors.grey[900],
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircularProgressIndicator(
+                              value: loadingProgress.expectedTotalBytes != null
+                                  ? loadingProgress.cumulativeBytesLoaded / 
+                                    loadingProgress.expectedTotalBytes!
+                                  : null,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white24),
+                            ),
+                            if (isVideo)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 8),
+                                child: Icon(
+                                  Icons.play_circle_outline,
+                                  color: Colors.white24,
+                                  size: 20,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    color: Colors.grey[900],
+                    child: const Center(
+                      child: Icon(
+                        Icons.error_outline,
+                        color: Colors.white24,
+                        size: 48,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // Video indicator overlay
+              if (isVideo)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.6),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Icon(
+                      Icons.videocam,
+                      color: Colors.white,
+                      size: 16,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showPostDetails(Map<String, dynamic> post) async {
+    final isVideo = post['media_type'] == 'video';
+    
+    await showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        child: Stack(
+          alignment: Alignment.topRight,
+          children: [
+            if (isVideo)
+              VideoPlayerWidget(
+                url: post['storage_path'],
+                autoPlay: false,
+                looping: true,
+              )
+            else
+              Image.network(
+                post['storage_path'],
+                fit: BoxFit.contain,
+              ),
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDeleteConfirmation(Map<String, dynamic> post) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text(
+          'Delete Post',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'Are you sure you want to delete this post?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            child: const Text(
+              'Delete',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await _authService.deletePost(
+          post['id'],
+          post['storage_path'],
+        );
+        await _fetchPosts();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Post deleted successfully')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error deleting post: ${e.toString()}')),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _addNewPost() async {
+    final ImagePicker picker = ImagePicker();
+    
+    try {
+      // Show media type picker
+      final mediaType = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: Colors.grey[900],
+          title: const Text(
+            'Add Post',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.image, color: Colors.white),
+                title: const Text(
+                  'Photo',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onTap: () => Navigator.pop(context, 'image'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.video_library, color: Colors.white),
+                title: const Text(
+                  'Video',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onTap: () => Navigator.pop(context, 'video'),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      if (mediaType == null) return;
+      if (!mounted) return;
+
+      if (mediaType == 'image') {
+        final XFile? image = await picker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 1920,
+          maxHeight: 1920,
+          imageQuality: 85,
+        );
+
+        if (image == null) return;
+        if (!mounted) return;
+
+        final imageBytes = await image.readAsBytes();
+        await _authService.uploadPost(imageBytes);
+      } else {
+        final XFile? video = await picker.pickVideo(
+          source: ImageSource.gallery,
+          maxDuration: const Duration(minutes: 5), // Reasonable limit for a demo
+        );
+
+        if (video == null) return;
+        if (!mounted) return;
+
+        // Show compression progress
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Processing video...')),
+          );
+        }
+
+        try {
+          await _authService.uploadVideo(video.path);
+        } catch (e) {
+          if (mounted) {
+            if (e.toString().contains('compression failed')) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Video compression failed. Try a shorter or smaller video.')),
+              );
+            } else if (e.toString().contains('size')) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Video is too large. Try a shorter video.')),
+              );
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Error uploading video: ${e.toString()}')),
+              );
+            }
+            return;  // Return early on error
+          }
+        }
+      }
+
+      await _fetchPosts();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Post uploaded successfully')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error creating post: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _fetchPosts() async {
+    if (_isLoggedIn == true) {
+      final posts = await _authService.getUserPosts();
+      if (mounted) {
+        setState(() {
+          _posts = posts;
+        });
+      }
+    }
+  }
+
+  Widget _buildProfilePicture(bool isEditing) {
+    final hasProfilePic = _profile != null && 
+                         _profile!['profile_pic_url'] != null && 
+                         _profile!['profile_pic_url'].isNotEmpty;
+
+    return GestureDetector(
+      onTap: isEditing ? _selectProfilePicture : null,
+      child: Stack(
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: Colors.grey[800],
+              shape: BoxShape.circle,
+              image: hasProfilePic
+                  ? DecorationImage(
+                      image: NetworkImage(_profile!['profile_pic_url']),
+                      fit: BoxFit.cover,
+                    )
+                  : null,
+            ),
+            child: !hasProfilePic
+                ? const Icon(
+                    Icons.person,
+                    color: Colors.white54,
+                    size: 40,
+                  )
+                : null,
+          ),
+          if (isEditing)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.edit,
+                  size: 16,
+                  color: Colors.black,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatColumn(String label, String value) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 14,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _selectProfilePicture() async {
+    final ImagePicker picker = ImagePicker();
+    
+    final source = await showDialog<ImageSource>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text(
+          'Select Image Source',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt, color: Colors.white),
+              title: const Text(
+                'Camera',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.pop(context, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library, color: Colors.white),
+              title: const Text(
+                'Gallery',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+            if (_profile != null && _profile!['profile_pic_url'] != null)
+              ListTile(
+                leading: const Icon(Icons.delete, color: Colors.red),
+                title: const Text(
+                  'Remove Photo',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () => Navigator.pop(context, null),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (source == null) {
+      // User selected "Remove Photo" or cancelled
+      if (_profile != null && _profile!['profile_pic_url'] != null) {
+        try {
+          await _authService.deleteProfilePicture(_profile!['profile_pic_url']);
+          await _fetchProfile();
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error removing profile picture: ${e.toString()}')),
+            );
+          }
+        }
+      }
+      return;
+    }
+
+    try {
+      final XFile? image = await picker.pickImage(
+        source: source,
+        maxWidth: 512, // Reasonable size for profile pictures
+        maxHeight: 512,
+        imageQuality: 85, // Good quality but not too large
+      );
+
+      if (image == null) return;
+
+      final imageBytes = await image.readAsBytes();
+      await _authService.uploadProfilePicture(imageBytes);
+      await _fetchProfile();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating profile picture: ${e.toString()}')),
+        );
+      }
+    }
+  }
+} 
