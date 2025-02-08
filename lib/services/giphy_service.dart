@@ -66,18 +66,6 @@ class GiphyService {
   }
   
   GiphyService._internal();
-  
-  // More conservative rate limiting
-  static const Duration _minCallInterval = Duration(seconds: 40); // Ensures we stay under 100 calls/hour
-  DateTime _lastApiCall = DateTime.now();
-
-  Future<void> _waitForRateLimit() async {
-    final timeSinceLastCall = DateTime.now().difference(_lastApiCall);
-    if (timeSinceLastCall < _minCallInterval) {
-      await Future.delayed(_minCallInterval - timeSinceLastCall);
-    }
-    _lastApiCall = DateTime.now();
-  }
 
   Future<List<GiphyGif>> getGifs({int limit = 3, int startIndex = 0}) async {
     return []; // Service disabled

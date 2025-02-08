@@ -7,7 +7,12 @@ import '../widgets/video_player_widget.dart';
 import '../services/video_service.dart';
 
 class UserProfileScreen extends StatefulWidget {
-  const UserProfileScreen({super.key});
+  final String? userId;  // null means viewing own profile
+  
+  const UserProfileScreen({
+    super.key, 
+    this.userId,  // Optional - if not provided, shows current user's profile
+  });
 
   @override
   State<UserProfileScreen> createState() => _UserProfileScreenState();
@@ -22,6 +27,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
   final _usernameController = TextEditingController();
   final _taglineController = TextEditingController();
   List<Map<String, dynamic>>? _posts;
+  bool _isOwnProfile = true;
+  bool _isFollowing = false;
+  List<Map<String, dynamic>>? _followers;
+  List<Map<String, dynamic>>? _following;
 
   @override
   void initState() {
@@ -35,7 +44,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
     WidgetsBinding.instance.removeObserver(this);
     _usernameController.dispose();
     _taglineController.dispose();
-    VideoService().cleanup();  // Clean up video cache
+    if (_isOwnProfile) {
+      VideoService().cleanup();  // Only clean up video cache when leaving own profile
+    }
     super.dispose();
   }
 
@@ -60,6 +71,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
     if (mounted) {
       setState(() {
         _isLoggedIn = loggedIn;
+        _isOwnProfile = widget.userId == null;
       });
       if (loggedIn) {
         _fetchProfile();
@@ -68,16 +80,70 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
   }
 
   Future<void> _fetchProfile() async {
-    final profile = await _authService.getProfile();
+    final profile = widget.userId != null 
+      ? await _authService.getUserProfile(widget.userId!)
+      : await _authService.getProfile();
+      
     if (mounted) {
       setState(() {
         _profile = profile;
-        if (!_isEditing) {
+        if (!_isEditing && _isOwnProfile) {
           _usernameController.text = profile?['username'] ?? '';
           _taglineController.text = profile?['tagline'] ?? '';
         }
       });
       _fetchPosts();
+      if (!_isOwnProfile && widget.userId != null) {
+        _checkFollowingStatus();
+      }
+      _fetchFollowCounts();
+    }
+  }
+
+  Future<void> _checkFollowingStatus() async {
+    if (widget.userId != null) {
+      final isFollowing = await _authService.isFollowing(widget.userId!);
+      if (mounted) {
+        setState(() {
+          _isFollowing = isFollowing;
+        });
+      }
+    }
+  }
+
+  Future<void> _fetchFollowCounts() async {
+    if (_profile != null) {
+      final userId = widget.userId ?? (await _authService.getProfile())?['id'];
+      if (userId != null) {
+        final followers = await _authService.getFollowers(userId);
+        final following = await _authService.getFollowing(userId);
+        if (mounted) {
+          setState(() {
+            _followers = followers;
+            _following = following;
+          });
+        }
+      }
+    }
+  }
+
+  Future<void> _toggleFollow() async {
+    if (widget.userId == null) return;
+
+    try {
+      if (_isFollowing) {
+        await _authService.unfollowUser(widget.userId!);
+      } else {
+        await _authService.followUser(widget.userId!);
+      }
+      await _fetchProfile();
+      await _checkFollowingStatus();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.toString()}')),
+        );
+      }
     }
   }
 
@@ -180,10 +246,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
-          _isLoggedIn! ? 'Profile' : 'Not Logged In',
+          _isOwnProfile ? 'Profile' : (_profile?['username'] != null ? '@${_profile!['username']}' : 'Profile'),
           style: const TextStyle(color: Colors.white),
         ),
-        actions: _isLoggedIn!
+        actions: _isLoggedIn! && _isOwnProfile
             ? [
                 if (_isEditing)
                   IconButton(
@@ -309,6 +375,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
       onRefresh: () async {
         await _fetchProfile();
         await _fetchPosts();
+        if (!_isOwnProfile) {
+          await _checkFollowingStatus();
+        }
       },
       color: Colors.white,
       backgroundColor: Colors.grey[900],
@@ -321,7 +390,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
             children: [
               Row(
                 children: [
-                  _buildProfilePicture(_isEditing),
+                  _buildProfilePicture(_isEditing && _isOwnProfile),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(
@@ -346,6 +415,24 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
                       ],
                     ),
                   ),
+                  if (!_isOwnProfile && _isLoggedIn!)
+                    TextButton(
+                      onPressed: _toggleFollow,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                        backgroundColor: _isFollowing ? Colors.transparent : Colors.white,
+                        side: BorderSide(
+                          color: _isFollowing ? Colors.white : Colors.transparent,
+                        ),
+                      ),
+                      child: Text(
+                        _isFollowing ? 'Following' : 'Follow',
+                        style: TextStyle(
+                          color: _isFollowing ? Colors.white : Colors.black,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                 ],
               ),
               const SizedBox(height: 24),
@@ -362,34 +449,36 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
                   _buildStatColumn('Posts', _posts?.length.toString() ?? '0'),
-                  _buildStatColumn('Following', '0'),
-                  _buildStatColumn('Followers', '0'),
+                  _buildStatColumn('Following', _profile!['following_count']?.toString() ?? '0'),
+                  _buildStatColumn('Followers', _profile!['follower_count']?.toString() ?? '0'),
                 ],
               ),
               const SizedBox(height: 24),
-              // Add Post Button
-              Center(
-                child: TextButton.icon(
-                  onPressed: _addNewPost,
-                  icon: const Icon(Icons.add_circle, color: Colors.white, size: 28),
-                  label: const Text(
-                    'Add Post',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
+              // Add Post Button - only show on own profile
+              if (_isOwnProfile) ...[
+                Center(
+                  child: TextButton.icon(
+                    onPressed: _addNewPost,
+                    icon: const Icon(Icons.add_circle, color: Colors.white, size: 28),
+                    label: const Text(
+                      'Add Post',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                  ),
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                    side: const BorderSide(color: Colors.white24),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      side: const BorderSide(color: Colors.white24),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 24),
+                const SizedBox(height: 24),
+              ],
               _buildPostsGrid(),
             ],
           ),
@@ -544,8 +633,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
             if (isVideo)
               VideoPlayerWidget(
                 url: post['storage_path'],
-                autoPlay: false,
-                looping: true,
+                autoPlay: true,  // Start playing automatically
+                looping: true,   // Loop the video
+                showOverlay: false,  // Don't show overlay initially
+                onTap: () {
+                  Navigator.of(context).pop();  // Close dialog on tap
+                },
               )
             else
               Image.network(
@@ -731,7 +824,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
 
   Future<void> _fetchPosts() async {
     if (_isLoggedIn == true) {
-      final posts = await _authService.getUserPosts();
+      final posts = widget.userId != null
+        ? await _authService.getUserPosts(userId: widget.userId)
+        : await _authService.getUserPosts();
+        
       if (mounted) {
         setState(() {
           _posts = posts;
@@ -793,25 +889,133 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
   }
 
   Widget _buildStatColumn(String label, String value) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
+    return GestureDetector(
+      onTap: () {
+        if (label == 'Followers' && _followers != null) {
+          _showUserList(_followers!, 'Followers');
+        } else if (label == 'Following' && _following != null) {
+          _showUserList(_following!, 'Following');
+        }
+      },
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: const TextStyle(
-            color: Colors.white70,
-            fontSize: 14,
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
+    );
+  }
+
+  void _showUserList(List<Map<String, dynamic>> users, String title) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.grey[900],
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          const Divider(color: Colors.white24),
+          Expanded(
+            child: ListView.builder(
+              itemCount: users.length,
+              itemBuilder: (context, index) {
+                final user = title == 'Followers' 
+                  ? users[index]['follower'] 
+                  : users[index]['following'];
+                return ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.grey[800],
+                      image: user['profile_pic_url'] != null
+                          ? DecorationImage(
+                              image: NetworkImage(user['profile_pic_url']),
+                              fit: BoxFit.cover,
+                            )
+                          : null,
+                    ),
+                    child: user['profile_pic_url'] == null
+                        ? const Icon(
+                            Icons.person,
+                            color: Colors.white54,
+                            size: 24,
+                          )
+                        : null,
+                  ),
+                  title: Text(
+                    '@${user['username']}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context); // Close the modal
+                    if (user['id'] != null) {
+                      Navigator.of(context).push(
+                        PageRouteBuilder(
+                          pageBuilder: (context, animation, secondaryAnimation) => 
+                            UserProfileScreen(userId: user['id']),
+                          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                            const begin = Offset(1.0, 0.0);
+                            const end = Offset.zero;
+                            const curve = Curves.easeOutExpo;
+                            var tween = Tween(begin: begin, end: end)
+                                .chain(CurveTween(curve: curve));
+                            var offsetAnimation = animation.drive(tween);
+                            return SlideTransition(
+                              position: offsetAnimation,
+                              child: child,
+                            );
+                          },
+                          transitionDuration: const Duration(milliseconds: 100),
+                        ),
+                      );
+                    }
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 

@@ -443,41 +443,66 @@ class _FeedScreenState extends State<FeedScreen> {
                               Positioned(
                                 left: 16,
                                 bottom: bottomPadding + 16,
-                                child: Row(
-                                  children: [
-                                    // Profile Picture
-                                    Container(
-                                      width: 40,
-                                      height: 40,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: Colors.grey[800],
-                                        image: creator['profile_pic_url'] != null
-                                            ? DecorationImage(
-                                                image: NetworkImage(creator['profile_pic_url']),
-                                                fit: BoxFit.cover,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    if (creator['id'] != null) {
+                                      Navigator.of(context).push(
+                                        PageRouteBuilder(
+                                          pageBuilder: (context, animation, secondaryAnimation) => 
+                                            UserProfileScreen(userId: creator['id']),
+                                          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                                            const begin = Offset(1.0, 0.0);
+                                            const end = Offset.zero;
+                                            const curve = Curves.easeOutExpo;
+                                            var tween = Tween(begin: begin, end: end)
+                                                .chain(CurveTween(curve: curve));
+                                            var offsetAnimation = animation.drive(tween);
+                                            return SlideTransition(
+                                              position: offsetAnimation,
+                                              child: child,
+                                            );
+                                          },
+                                          transitionDuration: const Duration(milliseconds: 100),
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  child: Row(
+                                    children: [
+                                      // Profile Picture
+                                      Container(
+                                        width: 40,
+                                        height: 40,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: Colors.grey[800],
+                                          image: creator['profile_pic_url'] != null
+                                              ? DecorationImage(
+                                                  image: NetworkImage(creator['profile_pic_url']),
+                                                  fit: BoxFit.cover,
+                                                )
+                                              : null,
+                                        ),
+                                        child: creator['profile_pic_url'] == null
+                                            ? const Icon(
+                                                Icons.person,
+                                                color: Colors.white54,
+                                                size: 24,
                                               )
                                             : null,
                                       ),
-                                      child: creator['profile_pic_url'] == null
-                                          ? const Icon(
-                                              Icons.person,
-                                              color: Colors.white54,
-                                              size: 24,
-                                            )
-                                          : null,
-                                    ),
-                                    const SizedBox(width: 12),
-                                    // Username
-                                    Text(
-                                      '@${creator['username'] ?? 'unknown'}',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
+                                      const SizedBox(width: 12),
+                                      // Username
+                                      Text(
+                                        '@${creator['username'] ?? 'unknown'}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
                             ],

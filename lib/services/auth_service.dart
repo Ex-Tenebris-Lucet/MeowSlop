@@ -138,17 +138,17 @@ class AuthService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getUserPosts() async {
+  Future<List<Map<String, dynamic>>> getUserPosts({String? userId}) async {
     try {
-      final user = _supabase.auth.currentUser;
-      if (user == null) return [];
+      final targetUserId = userId ?? _supabase.auth.currentUser?.id;
+      if (targetUserId == null) return [];
 
-      print('Fetching posts for user: ${user.id}');  // Debug log
+      print('Fetching posts for user: $targetUserId');  // Debug log
 
       final response = await _supabase
         .from('media_items')
         .select('*')  // Explicitly select all columns
-        .eq('owner_id', user.id)
+        .eq('owner_id', targetUserId)
         .order('created_at', ascending: false);
       
       print('Posts response: $response');  // Debug log
@@ -232,7 +232,6 @@ class AuthService {
     return uploadResult.videoUrl;
   }
 
-  @override
   Future<void> deletePost(String postId, String mediaUrl) async {
     final user = _supabase.auth.currentUser;
     if (user == null) throw Exception('Not logged in');
@@ -297,6 +296,7 @@ class AuthService {
         .select('''
           *,
           profiles:owner_id (
+            id,
             username,
             profile_pic_url
           )
@@ -308,5 +308,90 @@ class AuthService {
       print('Error fetching random posts: $e');
       return [];
     }
+  }
+
+  Future<Map<String, dynamic>?> getUserProfile(String userId) async {
+    final response = await _supabase
+      .from('profiles')
+      .select('''
+        *,
+        follower_count,
+        following_count
+      ''')
+      .eq('id', userId)
+      .single();
+    
+    return response;
+  }
+
+  Future<bool> isFollowing(String targetUserId) async {
+    final user = _supabase.auth.currentUser;
+    if (user == null) return false;
+
+    final response = await _supabase
+      .from('followers')
+      .select()
+      .eq('follower_id', user.id)
+      .eq('following_id', targetUserId)
+      .maybeSingle();
+
+    return response != null;
+  }
+
+  Future<void> followUser(String targetUserId) async {
+    final user = _supabase.auth.currentUser;
+    if (user == null) throw Exception('Not logged in');
+    if (user.id == targetUserId) throw Exception('Cannot follow yourself');
+
+    await _supabase
+      .from('followers')
+      .insert({
+        'follower_id': user.id,
+        'following_id': targetUserId,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+  }
+
+  Future<void> unfollowUser(String targetUserId) async {
+    final user = _supabase.auth.currentUser;
+    if (user == null) throw Exception('Not logged in');
+
+    await _supabase
+      .from('followers')
+      .delete()
+      .eq('follower_id', user.id)
+      .eq('following_id', targetUserId);
+  }
+
+  Future<List<Map<String, dynamic>>> getFollowers(String userId) async {
+    final response = await _supabase
+      .from('followers')
+      .select('''
+        follower:profiles!follower_id (
+          id,
+          username,
+          profile_pic_url
+        )
+      ''')
+      .eq('following_id', userId)
+      .order('created_at', ascending: false);
+
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  Future<List<Map<String, dynamic>>> getFollowing(String userId) async {
+    final response = await _supabase
+      .from('followers')
+      .select('''
+        following:profiles!following_id (
+          id,
+          username,
+          profile_pic_url
+        )
+      ''')
+      .eq('follower_id', userId)
+      .order('created_at', ascending: false);
+
+    return List<Map<String, dynamic>>.from(response);
   }
 } 

@@ -31,9 +31,6 @@ class VideoService {
         );
       }
 
-      // Calculate target bitrate based on desired size
-      final info = await VideoCompress.getMediaInfo(videoPath);
-      
       // Start compression with medium quality
       final MediaInfo? result = await VideoCompress.compressVideo(
         videoPath,

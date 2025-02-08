@@ -27,9 +27,47 @@ create table if not exists media_items (
   owner_id uuid references profiles(id) not null
 );
 
+-- Create followers table for following functionality
+create table if not exists followers (
+  follower_id uuid references profiles(id) not null,
+  following_id uuid references profiles(id) not null,
+  created_at timestamp with time zone default now(),
+  primary key (follower_id, following_id),  -- Ensures unique relationships
+  check (follower_id != following_id)  -- Prevents self-following
+);
+
+-- Add indexes for better query performance
+create index if not exists idx_followers_follower on followers(follower_id);
+create index if not exists idx_followers_following on followers(following_id);
+
 -- Disable RLS
 alter table profiles disable row level security;
 alter table media_items disable row level security;
+alter table followers disable row level security;
+
+-- Add follower count and following count to profiles for quick access
+alter table profiles add column if not exists follower_count integer default 0;
+alter table profiles add column if not exists following_count integer default 0;
+
+-- Create function to update follower counts
+create or replace function update_follower_counts()
+returns trigger as $$
+begin
+  if (TG_OP = 'INSERT') then
+    update profiles set follower_count = follower_count + 1 where id = NEW.following_id;
+    update profiles set following_count = following_count + 1 where id = NEW.follower_id;
+  elsif (TG_OP = 'DELETE') then
+    update profiles set follower_count = follower_count - 1 where id = OLD.following_id;
+    update profiles set following_count = following_count - 1 where id = OLD.follower_id;
+  end if;
+  return null;
+end;
+$$ language plpgsql;
+
+-- Create trigger to maintain follower counts
+create trigger update_follower_counts_trigger
+after insert or delete on followers
+for each row execute function update_follower_counts();
 ```
 
 ## Storage Buckets
