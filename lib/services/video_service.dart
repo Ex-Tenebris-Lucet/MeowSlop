@@ -249,6 +249,65 @@ class VideoPreloadManager {
     }
   }
 
+  Future<VideoPlayerController?> getController(String url) async {
+    try {
+      // First try to get a preloaded controller
+      final video = _preloadedVideos[url];
+      if (video != null) {
+        try {
+          // Check if the preloaded controller is still valid
+          if (video.controller.value.isInitialized) {
+            return video.controller;
+          }
+        } catch (e) {
+          print('Error checking preloaded controller: $e');
+          // Controller is invalid, remove it
+          await _disposeVideo(url);
+        }
+      }
+
+      // Create a new controller
+      final controller = VideoPlayerController.networkUrl(
+        Uri.parse(url),
+        videoPlayerOptions: VideoPlayerOptions(
+          mixWithOthers: true,
+          allowBackgroundPlayback: false,
+        ),
+      );
+
+      // Initialize with retry logic
+      bool initialized = false;
+      int retryCount = 0;
+      const maxRetries = 2;
+
+      while (!initialized && retryCount < maxRetries) {
+        try {
+          await controller.initialize();
+          initialized = true;
+        } catch (e) {
+          print('Error initializing controller (attempt ${retryCount + 1}): $e');
+          retryCount++;
+          if (retryCount < maxRetries) {
+            await Future.delayed(Duration(milliseconds: 500 * retryCount));
+          }
+        }
+      }
+
+      if (!initialized) {
+        await controller.dispose();
+        return null;
+      }
+
+      await controller.setLooping(true);
+      await controller.setVolume(1.0);
+      
+      return controller;
+    } catch (e) {
+      print('Error in getController: $e');
+      return null;
+    }
+  }
+
   Future<void> _disposeVideo(String url) async {
     final video = _preloadedVideos.remove(url);
     if (video != null) {
@@ -260,47 +319,6 @@ class VideoPreloadManager {
         print('Error disposing video controller: $e');
       }
     }
-  }
-
-  Future<VideoPlayerController?> getController(String url) async {
-    final video = _preloadedVideos[url];
-    if (video != null) {
-      try {
-        final playbackController = VideoPlayerController.networkUrl(
-          Uri.parse(url),
-          videoPlayerOptions: VideoPlayerOptions(
-            mixWithOthers: true,
-            allowBackgroundPlayback: false,
-          ),
-        );
-        
-        // Wait for initialization before returning
-        await playbackController.initialize();
-        
-        // Ensure we maintain the correct aspect ratio
-        if (video.aspectRatio != null) {
-          // If aspect ratio is very different, something might be wrong with the preloaded value
-          // In this case, trust the new controller
-          if ((video.aspectRatio! - playbackController.value.aspectRatio).abs() < 0.1) {
-            playbackController.setVolume(1.0);
-            playbackController.setLooping(true);
-            playbackController.play();
-            return playbackController;
-          }
-        }
-        
-        // If we don't have a stored aspect ratio or it's very different,
-        // make sure we're fully initialized before playing
-        await playbackController.setVolume(1.0);
-        await playbackController.setLooping(true);
-        await playbackController.play();
-        return playbackController;
-      } catch (e) {
-        print('Error creating playback controller: $e');
-        return null;
-      }
-    }
-    return null;
   }
 
   Future<void> dispose() async {

@@ -10,6 +10,7 @@ class VideoPlayerWidget extends StatefulWidget {
   final bool showOverlay;
   final VoidCallback? onTap;
 
+
   const VideoPlayerWidget({
     super.key,
     required this.url,
@@ -28,6 +29,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   ChewieController? _chewieController;
   bool _isInitialized = false;
   bool _hasError = false;
+  int _retryCount = 0;
+  static const int _maxRetries = 2;
 
   @override
   void initState() {
@@ -41,6 +44,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     
     if (oldWidget.url != widget.url) {
       _disposeControllers();
+      _retryCount = 0;
       _initializePlayer();
     }
     
@@ -57,33 +61,61 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     _chewieController?.dispose();
     _chewieController = null;
     if (_videoPlayerController != null) {
-      _videoPlayerController!.dispose();
+      _videoPlayerController!.pause().then((_) {
+        if (mounted) {
+          _videoPlayerController!.dispose();
+          _videoPlayerController = null;
+          _isInitialized = false;
+          _hasError = false;
+        }
+      });
     }
-    _videoPlayerController = null;
-    _isInitialized = false;
-    _hasError = false;
   }
 
   Future<void> _initializePlayer() async {
     try {
-      final controller = await VideoPreloadManager().getController(widget.url);
-      if (controller != null && mounted) {
-        setState(() {
-          _videoPlayerController = controller;
-          _initializeChewieController();
-          _isInitialized = true;
-          _hasError = false;
-        });
-      } else {
-        throw Exception('Failed to initialize video controller');
+      // Try to get a preloaded controller first
+      var controller = await VideoPreloadManager().getController(widget.url);
+      
+      // If no preloaded controller, create a new one
+      if (controller == null) {
+        controller = VideoPlayerController.networkUrl(
+          Uri.parse(widget.url),
+          videoPlayerOptions: VideoPlayerOptions(
+            mixWithOthers: true,
+            allowBackgroundPlayback: false,
+          ),
+        );
+        await controller.initialize();
+        await controller.setLooping(true);
       }
+
+      if (!mounted) {
+        controller.dispose();
+        return;
+      }
+
+      setState(() {
+        _videoPlayerController = controller;
+        _initializeChewieController();
+        _isInitialized = true;
+        _hasError = false;
+        _retryCount = 0;
+      });
     } catch (e) {
       print('Error initializing video player: $e');
       if (mounted) {
-        setState(() {
-          _hasError = true;
-          _isInitialized = false;
-        });
+        if (_retryCount < _maxRetries) {
+          _retryCount++;
+          print('Retrying video initialization (attempt $_retryCount)');
+          await Future.delayed(Duration(milliseconds: 500 * _retryCount));
+          _initializePlayer();
+        } else {
+          setState(() {
+            _hasError = true;
+            _isInitialized = false;
+          });
+        }
       }
     }
   }
@@ -103,6 +135,14 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
       allowPlaybackSpeedChanging: false,
       showOptions: false,
       errorBuilder: (context, errorMessage) {
+        // Attempt to recover from Chewie errors
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted && _retryCount < _maxRetries) {
+            _retryCount++;
+            _initializePlayer();
+          }
+        });
+        
         return Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
