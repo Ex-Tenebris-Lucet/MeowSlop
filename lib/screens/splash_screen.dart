@@ -111,6 +111,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                     fontSize: 48,
                     fontWeight: FontWeight.bold,
                     color: Color(0xFFFFE66D), // Cat eye color
+                    fontFamily: 'CherryBombOne',
                   ),
                 ),
               ),

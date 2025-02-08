@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/auth_service.dart';
+import '../services/video_service.dart';
 import 'user_profile_screen.dart';
 import '../widgets/video_player_widget.dart';
 
@@ -25,6 +26,7 @@ class FeedScreen extends StatefulWidget {
 
 class _FeedScreenState extends State<FeedScreen> {
   final _authService = AuthService();
+  final _videoPreloadManager = VideoPreloadManager();
   List<Map<String, dynamic>> _posts = [];
   bool _isLoading = true;
   bool _hasMorePosts = true;
@@ -35,9 +37,9 @@ class _FeedScreenState extends State<FeedScreen> {
   );
   bool _showOverlay = false;
   final Map<String, ImageProvider> _preloadedImages = {};
-  static const _preloadAhead = 3; // Number of images to preload ahead
-  static const _maxCacheSize = 20; // Maximum number of images to keep in cache
-  final Set<String> _seenPostIds = {}; // Track seen posts to prevent duplicates
+  static const _preloadAhead = 3;
+  static const _maxCacheSize = 20;
+  final Set<String> _seenPostIds = {};
 
   @override
   void initState() {
@@ -54,11 +56,11 @@ class _FeedScreenState extends State<FeedScreen> {
           _posts = posts;
           _isLoading = false;
           _hasMorePosts = posts.length == _initialPostCount;
-          // Track initial post IDs
           _seenPostIds.addAll(posts.map((p) => p['id'].toString()));
         });
-        // Preload initial set of images
         _preloadImages(0);
+        // Start preloading videos from the beginning
+        _videoPreloadManager.updateCurrentIndex(0, _posts);
       }
     } catch (e) {
       print('Error loading initial posts: $e');
@@ -112,7 +114,11 @@ class _FeedScreenState extends State<FeedScreen> {
   void _preloadImages(int startIndex) {
     // Clean up cache if it's too large
     if (_preloadedImages.length > _maxCacheSize) {
-      final keysToRemove = _preloadedImages.keys.take(_preloadedImages.length - _maxCacheSize);
+      // Create a list of keys to remove first
+      final keysToRemove = _preloadedImages.keys
+          .take(_preloadedImages.length - _maxCacheSize)
+          .toList();  // Convert to list to avoid concurrent modification
+      // Remove the keys in a separate step
       for (final key in keysToRemove) {
         _preloadedImages.remove(key);
       }
@@ -120,7 +126,8 @@ class _FeedScreenState extends State<FeedScreen> {
 
     for (var i = startIndex; i < _posts.length && i < startIndex + _preloadAhead; i++) {
       final post = _posts[i];
-      final url = post['storage_path'];
+      final isVideo = post['media_type'] == 'video';
+      final url = isVideo ? post['thumbnail_url'] : post['storage_path'];
       if (url == null || url.isEmpty) continue;
       
       if (!_preloadedImages.containsKey(url)) {
@@ -161,7 +168,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   void dispose() {
-    // Clear image cache
+    _videoPreloadManager.dispose();
     _preloadedImages.clear();
     SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.edgeToEdge,
@@ -266,6 +273,8 @@ class _FeedScreenState extends State<FeedScreen> {
             }
             // Preload next set of images
             _preloadImages(index + 1);
+            // Update video preloading
+            _videoPreloadManager.updateCurrentIndex(index, _posts);
             // Hide overlay when scrolling to a new post
             if (_showOverlay) {
               _toggleOverlay();
@@ -294,7 +303,8 @@ class _FeedScreenState extends State<FeedScreen> {
             final imageUrl = post['storage_path'] as String?;
             final isVideo = post['media_type'] == 'video';
             final thumbnailUrl = post['thumbnail_url'];
-            final displayUrl = isVideo ? (thumbnailUrl ?? imageUrl) : imageUrl;
+            // Only use thumbnail URL for videos, and only if it exists
+            final displayUrl = isVideo ? thumbnailUrl : imageUrl;
             
             if (displayUrl == null || displayUrl.isEmpty) {
               return Container(

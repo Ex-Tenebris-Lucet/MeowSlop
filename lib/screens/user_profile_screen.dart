@@ -540,7 +540,34 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
       itemBuilder: (context, index) {
         final post = _posts![index];
         final isVideo = post['media_type'] == 'video';
-        final displayUrl = isVideo ? post['thumbnail_url'] ?? post['storage_path'] : post['storage_path'];
+        // Only use thumbnail URL for videos, and only if it exists
+        final displayUrl = isVideo ? post['thumbnail_url'] : post['storage_path'];
+
+        if (displayUrl == null || displayUrl.isEmpty) {
+          return Container(
+            color: Colors.grey[900],
+            child: const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.video_library,
+                    color: Colors.white24,
+                    size: 32,
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'Processing',
+                    style: TextStyle(
+                      color: Colors.white54,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
 
         return GestureDetector(
           onTap: () => _showPostDetails(post),
@@ -897,25 +924,32 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
           _showUserList(_following!, 'Following');
         }
       },
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          color: Colors.transparent,
+        ),
+        child: Column(
+          children: [
+            Text(
+              value,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 14,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

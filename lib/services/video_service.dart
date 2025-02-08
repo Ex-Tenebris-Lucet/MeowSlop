@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:video_compress/video_compress.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:video_player/video_player.dart';
 
 class VideoService {
   static const int _targetSizeMB = 10; // Target size in MB
@@ -166,5 +167,160 @@ class VideoUploadResult {
   VideoUploadResult({
     required this.videoUrl,
     required this.thumbnailUrl,
+  });
+}
+
+class VideoPreloadManager {
+  static final VideoPreloadManager _instance = VideoPreloadManager._internal();
+  factory VideoPreloadManager() => _instance;
+  VideoPreloadManager._internal();
+
+  final Map<String, _PreloadedVideo> _preloadedVideos = {};
+  final Set<String> _currentlyPreloading = {};
+  int _currentIndex = 0;
+  static const int _preloadAhead = 2;
+  static const int _maxCachedVideos = 3;
+
+  Future<void> updateCurrentIndex(int index, List<Map<String, dynamic>> posts) async {
+    if (_currentIndex == index) return;
+    _currentIndex = index;
+
+    try {
+      final neededUrls = <String>{};
+      if (index >= 0 && index < posts.length && posts[index]['media_type'] == 'video') {
+        final videoUrl = posts[index]['storage_path'];
+        if (videoUrl != null && videoUrl.isNotEmpty) {
+          neededUrls.add(videoUrl);
+        }
+      }
+      for (var i = index + 1; i < posts.length && i <= index + _preloadAhead; i++) {
+        if (posts[i]['media_type'] == 'video') {
+          final videoUrl = posts[i]['storage_path'];
+          if (videoUrl != null && videoUrl.isNotEmpty) {
+            neededUrls.add(videoUrl);
+          }
+        }
+      }
+
+      final urlsToRemove = _preloadedVideos.keys.where((url) => !neededUrls.contains(url)).toList();
+      for (final url in urlsToRemove) {
+        await _disposeVideo(url);
+      }
+
+      for (final url in neededUrls) {
+        if (!_preloadedVideos.containsKey(url) && !_currentlyPreloading.contains(url)) {
+          await _preloadVideo(url);
+          break;
+        }
+      }
+    } catch (e) {
+      print('Error updating preloaded videos: $e');
+    }
+  }
+
+  Future<void> _preloadVideo(String url) async {
+    if (_currentlyPreloading.contains(url)) return;
+    if (_preloadedVideos.length >= _maxCachedVideos) return;
+    
+    try {
+      _currentlyPreloading.add(url);
+      
+      final controller = VideoPlayerController.networkUrl(
+        Uri.parse(url),
+        videoPlayerOptions: VideoPlayerOptions(
+          mixWithOthers: true,
+          allowBackgroundPlayback: false,
+        ),
+      );
+
+      await controller.initialize();
+      await controller.setLooping(true);
+      await controller.setVolume(0.0);
+      
+      _preloadedVideos[url] = _PreloadedVideo(
+        controller: controller,
+        timestamp: DateTime.now(),
+        aspectRatio: controller.value.aspectRatio,  // Store the aspect ratio
+      );
+    } catch (e) {
+      print('Error preloading video $url: $e');
+    } finally {
+      _currentlyPreloading.remove(url);
+    }
+  }
+
+  Future<void> _disposeVideo(String url) async {
+    final video = _preloadedVideos.remove(url);
+    if (video != null) {
+      try {
+        await video.controller.pause();
+        await Future.delayed(const Duration(milliseconds: 50));
+        await video.controller.dispose();
+      } catch (e) {
+        print('Error disposing video controller: $e');
+      }
+    }
+  }
+
+  Future<VideoPlayerController?> getController(String url) async {
+    final video = _preloadedVideos[url];
+    if (video != null) {
+      try {
+        final playbackController = VideoPlayerController.networkUrl(
+          Uri.parse(url),
+          videoPlayerOptions: VideoPlayerOptions(
+            mixWithOthers: true,
+            allowBackgroundPlayback: false,
+          ),
+        );
+        
+        // Wait for initialization before returning
+        await playbackController.initialize();
+        
+        // Ensure we maintain the correct aspect ratio
+        if (video.aspectRatio != null) {
+          // If aspect ratio is very different, something might be wrong with the preloaded value
+          // In this case, trust the new controller
+          if ((video.aspectRatio! - playbackController.value.aspectRatio).abs() < 0.1) {
+            playbackController.setVolume(1.0);
+            playbackController.setLooping(true);
+            playbackController.play();
+            return playbackController;
+          }
+        }
+        
+        // If we don't have a stored aspect ratio or it's very different,
+        // make sure we're fully initialized before playing
+        await playbackController.setVolume(1.0);
+        await playbackController.setLooping(true);
+        await playbackController.play();
+        return playbackController;
+      } catch (e) {
+        print('Error creating playback controller: $e');
+        return null;
+      }
+    }
+    return null;
+  }
+
+  Future<void> dispose() async {
+    final urls = List<String>.from(_preloadedVideos.keys);
+    for (final url in urls) {
+      await _disposeVideo(url);
+    }
+    _preloadedVideos.clear();
+    _currentlyPreloading.clear();
+  }
+}
+
+class _PreloadedVideo {
+  final VideoPlayerController controller;
+  final DateTime timestamp;
+  final double? aspectRatio;  // Store the aspect ratio
+
+  _PreloadedVideo({
+    required this.controller,
+    required this.timestamp,
+    this.aspectRatio,
   });
 } 
