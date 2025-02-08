@@ -24,18 +24,28 @@ class VideoPlayerWidget extends StatefulWidget {
   State<VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
 }
 
-class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
+class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindingObserver {
   VideoPlayerController? _videoPlayerController;
   ChewieController? _chewieController;
   bool _isInitialized = false;
   bool _hasError = false;
   int _retryCount = 0;
   static const int _maxRetries = 2;
+  bool _isDisposed = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializePlayer();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.paused) {
+      _videoPlayerController?.pause();
+    }
   }
 
   @override
@@ -58,11 +68,13 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   }
 
   void _disposeControllers() {
+    if (_isDisposed) return;
+    
     _chewieController?.dispose();
     _chewieController = null;
     if (_videoPlayerController != null) {
       _videoPlayerController!.pause().then((_) {
-        if (mounted) {
+        if (mounted && !_isDisposed) {
           _videoPlayerController!.dispose();
           _videoPlayerController = null;
           _isInitialized = false;
@@ -73,6 +85,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   }
 
   Future<void> _initializePlayer() async {
+    if (_isDisposed) return;
+    
     try {
       // Try to get a preloaded controller first
       var controller = await VideoPreloadManager().getController(widget.url);
@@ -86,11 +100,32 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
             allowBackgroundPlayback: false,
           ),
         );
+        
+        // Add listener for network errors
+        controller.addListener(() {
+          if (!mounted || _isDisposed) return;
+          
+          final playerValue = controller?.value;
+          if (playerValue != null && playerValue.hasError && !_hasError) {
+            setState(() {
+              _hasError = true;
+              if (_retryCount < _maxRetries) {
+                _retryCount++;
+                Future.delayed(Duration(milliseconds: 500 * _retryCount), () {
+                  if (mounted && !_isDisposed) {
+                    _initializePlayer();
+                  }
+                });
+              }
+            });
+          }
+        });
+        
         await controller.initialize();
         await controller.setLooping(true);
       }
 
-      if (!mounted) {
+      if (!mounted || _isDisposed) {
         controller.dispose();
         return;
       }
@@ -104,7 +139,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
       });
     } catch (e) {
       print('Error initializing video player: $e');
-      if (mounted) {
+      if (mounted && !_isDisposed) {
         if (_retryCount < _maxRetries) {
           _retryCount++;
           print('Retrying video initialization (attempt $_retryCount)');
@@ -218,6 +253,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
 
   @override
   void dispose() {
+    _isDisposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     _disposeControllers();
     super.dispose();
   }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/device_service.dart';
@@ -61,6 +62,48 @@ class MeowSlopApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'MeowSlop',
+      builder: (context, widget) {
+        ErrorWidget.builder = (FlutterErrorDetails details) {
+          return Container(
+            color: MeowColors.voidBlack,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.error_outline,
+                    color: MeowColors.voidAccent,
+                    size: 48,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Something went wrong',
+                    style: TextStyle(
+                      color: MeowColors.creamWhite,
+                      fontSize: 18,
+                    ),
+                  ),
+                  if (kDebugMode) ...[
+                    const SizedBox(height: 16),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Text(
+                        details.exception.toString(),
+                        style: TextStyle(
+                          color: MeowColors.creamWhite.withOpacity(0.7),
+                          fontSize: 14,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        };
+        return widget ?? const SizedBox.shrink();
+      },
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: MeowColors.voidBlack,
         colorScheme: const ColorScheme.dark(
