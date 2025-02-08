@@ -349,23 +349,33 @@ class _FeedScreenState extends State<FeedScreen> {
                       child: Container(
                         color: Colors.black,
                         child: isVideo
-                            ? VideoPlayerWidget(
-                                url: imageUrl!,
-                                autoPlay: true,
-                                looping: true,
-                                showOverlay: _showOverlay,
-                                onTap: () {
-                                  final page = _pageController.page;
-                                  if (page != null && page % 1.0 != 0) {
-                                    // We're between pages, so snap to nearest
-                                    _pageController.animateToPage(
-                                      page.round(),
-                                      duration: const Duration(milliseconds: 1),
-                                      curve: Curves.linear,
-                                    ).then((_) => _toggleOverlay());
-                                  } else {
-                                    _toggleOverlay();
-                                  }
+                            ? LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final videoAspectRatio = _videoPreloadManager
+                                      .getAspectRatioForUrl(imageUrl!);
+                                  
+                                  return AspectRatio(
+                                    aspectRatio: videoAspectRatio ?? 16/9,
+                                    child: VideoPlayerWidget(
+                                      url: imageUrl!,
+                                      autoPlay: true,
+                                      looping: true,
+                                      showOverlay: _showOverlay,
+                                      onTap: () {
+                                        final page = _pageController.page;
+                                        if (page != null && page % 1.0 != 0) {
+                                          // We're between pages, so snap to nearest
+                                          _pageController.animateToPage(
+                                            page.round(),
+                                            duration: const Duration(milliseconds: 1),
+                                            curve: Curves.linear,
+                                          ).then((_) => _toggleOverlay());
+                                        } else {
+                                          _toggleOverlay();
+                                        }
+                                      },
+                                    ),
+                                  );
                                 },
                               )
                             : Image(

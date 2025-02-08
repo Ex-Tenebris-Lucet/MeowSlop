@@ -32,6 +32,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindi
   int _retryCount = 0;
   static const int _maxRetries = 2;
   bool _isDisposed = false;
+  bool _showDebugInfo = false;
 
   @override
   void initState() {
@@ -164,7 +165,6 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindi
       autoPlay: widget.autoPlay && !_hasError,
       looping: widget.looping,
       showControls: false,
-      aspectRatio: _videoPlayerController!.value.aspectRatio,
       autoInitialize: false,
       allowMuting: false,
       allowPlaybackSpeedChanging: false,
@@ -200,54 +200,65 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindi
     );
   }
 
+  void _toggleDebugInfo() {
+    setState(() {
+      _showDebugInfo = !_showDebugInfo;
+    });
+  }
+
+  String _getDebugInfo() {
+    if (_videoPlayerController == null) return 'No controller';
+    final value = _videoPlayerController!.value;
+    return '''
+    Size: ${value.size.width.toInt()}x${value.size.height.toInt()}
+    Aspect Ratio: ${value.aspectRatio.toStringAsFixed(2)}
+    Position: ${value.position.inSeconds}s
+    Duration: ${value.duration.inSeconds}s
+    Playing: ${value.isPlaying}
+    Buffered: ${value.buffered.length}
+    URL: ${widget.url}
+    ''';
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_hasError) {
-      return Container(
-        color: Colors.black,
-        child: const Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.error_outline,
-                color: Colors.white24,
-                size: 48,
-              ),
-              SizedBox(height: 8),
-              Text(
-                'Error playing video',
-                style: TextStyle(color: Colors.white70),
-              ),
-            ],
-          ),
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline,
+              color: Colors.white24,
+              size: 48,
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Error playing video',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ],
         ),
       );
     }
 
     if (!_isInitialized) {
-      return Container(
-        color: Colors.black,
-        child: const Center(
-          child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.white24),
-          ),
+      return const Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Colors.white24),
         ),
       );
     }
 
     return GestureDetector(
       onTap: widget.onTap,
-      child: Container(
-        color: Colors.black,
-        child: _chewieController != null
-            ? Chewie(controller: _chewieController!)
-            : const Center(
-                child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white24),
-                ),
+      child: _chewieController != null
+          ? Chewie(controller: _chewieController!)
+          : const Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white24),
               ),
-      ),
+            ),
     );
   }
 

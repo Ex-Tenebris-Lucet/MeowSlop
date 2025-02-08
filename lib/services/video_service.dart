@@ -329,6 +329,10 @@ class VideoPreloadManager {
     _preloadedVideos.clear();
     _currentlyPreloading.clear();
   }
+
+  double? getAspectRatioForUrl(String url) {
+    return _preloadedVideos[url]?.aspectRatio;
+  }
 }
 
 class _PreloadedVideo {
