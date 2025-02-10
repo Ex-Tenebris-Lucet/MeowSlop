@@ -1,173 +1,139 @@
 import 'dart:io';
 import 'package:video_compress/video_compress.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:video_player/video_player.dart';
+import 'package:flutter/foundation.dart';
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 's3_service.dart';
 
 class VideoService {
-  static const int _targetSizeMB = 10; // Target size in MB
-  static const double _minCompressionRatio = 0.5; // Minimum compression ratio
-  static const String _videoBucket = 'post_media';
-  static const String _thumbnailBucket = 'post_thumbnails';
+  static final VideoService _instance = VideoService._internal();
+  factory VideoService() => _instance;
+  VideoService._internal();
   
-  final _supabase = Supabase.instance.client;
+  final _s3Service = S3Service();
+  bool _isCancelled = false;
+  double _uploadProgress = 0.0;
+  
+  double get uploadProgress => _uploadProgress;
+  
+  void cancelUpload() {
+    _isCancelled = true;
+    _s3Service.cancelUpload();
+  }
 
-  Future<CompressedVideoInfo?> compressVideo(String videoPath) async {
+  void _resetCancellation() {
+    _isCancelled = false;
+  }
+
+  Future<String> compressVideo(String videoPath) async {
+    _resetCancellation();
     try {
-      final inputFile = File(videoPath);
-      final inputSize = await inputFile.length();
-      final inputSizeMB = inputSize / (1024 * 1024);
-
-      // Generate thumbnail first
-      final thumbnailFile = await VideoCompress.getFileThumbnail(
-        videoPath,
-        quality: 50,
-        position: -1, // -1 means center of video
-      );
-
-      // If video is already small enough, return original
-      if (inputSizeMB <= _targetSizeMB) {
-        return CompressedVideoInfo(
-          path: videoPath,
-          thumbnailPath: thumbnailFile.path,
-        );
-      }
-
-      // Start compression with medium quality
-      final MediaInfo? result = await VideoCompress.compressVideo(
+      final result = await VideoCompress.compressVideo(
         videoPath,
         quality: VideoQuality.MediumQuality,
-        deleteOrigin: false, // Keep original file
+        deleteOrigin: false,
         includeAudio: true,
       );
 
-      if (result == null || result.file == null) {
-        throw Exception('Compression failed: No output file');
+      if (result == null || result.path == null) {
+        throw Exception('Video compression failed');
       }
 
-      final outputSize = await result.file!.length();
-      final compressionRatio = outputSize / inputSize;
-
-      // If compression isn't effective enough, try again with lower quality
-      if (compressionRatio > _minCompressionRatio && outputSize > _targetSizeMB * 1024 * 1024) {
-        await VideoCompress.cancelCompression();
-        final MediaInfo? secondAttempt = await VideoCompress.compressVideo(
-          videoPath,
-          quality: VideoQuality.LowQuality,
-          deleteOrigin: false,
-          includeAudio: true,
-          frameRate: 24,
-        );
-
-        if (secondAttempt == null || secondAttempt.file == null) {
-          throw Exception('Second compression attempt failed');
-        }
-
-        return CompressedVideoInfo(
-          path: secondAttempt.file!.path,
-          thumbnailPath: thumbnailFile.path,
-        );
-      }
-
-      return CompressedVideoInfo(
-        path: result.file!.path,
-        thumbnailPath: thumbnailFile.path,
-      );
+      return result.path!;
     } catch (e) {
-      print('Error compressing video: $e');
-      await VideoCompress.cancelCompression();
-      return null;
+      debugPrint('Error compressing video: $e');
+      throw Exception('Failed to compress video: $e');
     }
   }
 
-  Future<VideoUploadResult?> uploadVideo(CompressedVideoInfo videoInfo, String userId) async {
+  Future<String> generateThumbnail(String videoPath) async {
     try {
-      final videoFileName = '${userId}/${DateTime.now().millisecondsSinceEpoch}_video.mp4';
-      final thumbnailFileName = '${userId}/${DateTime.now().millisecondsSinceEpoch}_thumb.jpg';
-
-      // Upload video
-      await _supabase.storage.from(_videoBucket).uploadBinary(
-        videoFileName,
-        File(videoInfo.path).readAsBytesSync(),
-        fileOptions: const FileOptions(
-          contentType: 'video/mp4',
-          upsert: true,
-        ),
+      final thumbnail = await VideoCompress.getFileThumbnail(
+        videoPath,
+        quality: 50,
+        position: -1,  // -1 means center of video
       );
-
-      // Upload thumbnail
-      await _supabase.storage.from(_thumbnailBucket).uploadBinary(
-        thumbnailFileName,
-        File(videoInfo.thumbnailPath).readAsBytesSync(),
-        fileOptions: const FileOptions(
-          contentType: 'image/jpeg',
-          upsert: true,
-        ),
-      );
-
-      // Get public URLs
-      final videoUrl = _supabase.storage.from(_videoBucket).getPublicUrl(videoFileName);
-      final thumbnailUrl = _supabase.storage.from(_thumbnailBucket).getPublicUrl(thumbnailFileName);
-
-      return VideoUploadResult(
-        videoUrl: videoUrl,
-        thumbnailUrl: thumbnailUrl,
-      );
+      return thumbnail.path;
     } catch (e) {
-      print('Error uploading video: $e');
-      return null;
+      debugPrint('Error generating thumbnail: $e');
+      throw Exception('Failed to generate thumbnail: $e');
+    }
+  }
+
+  Future<Map<String, String>> uploadVideo(String videoPath, String? thumbnailPath, {Function(double)? onProgress}) async {
+    _resetCancellation();
+    if (_isCancelled) throw Exception('Upload cancelled');
+    _uploadProgress = 0.0;
+
+    String videoUrl = '';
+    String thumbnailUrl = '';
+    
+    try {
+      // Generate thumbnail if not provided
+      final actualThumbnailPath = thumbnailPath ?? await generateThumbnail(videoPath);
+      
+      // Start with video upload (70% of progress)
+      videoUrl = await _s3Service.uploadFile(
+        filePath: videoPath,
+        prefix: S3Service.videoPath,
+        contentType: 'video/mp4',
+        onProgress: (progress) {
+          _uploadProgress = progress * 0.7;
+          onProgress?.call(_uploadProgress);
+        },
+      );
+
+      if (_isCancelled) throw Exception('Upload cancelled');
+
+      // Then upload thumbnail (30% of progress)
+      thumbnailUrl = await _s3Service.uploadFile(
+        filePath: actualThumbnailPath,
+        prefix: S3Service.thumbnailPath,
+        contentType: 'image/jpeg',
+        onProgress: (progress) {
+          _uploadProgress = 0.7 + (progress * 0.3);
+          onProgress?.call(_uploadProgress);
+        },
+      );
+
+      return {
+        'video_url': videoUrl,
+        'thumbnail_url': thumbnailUrl,
+      };
+    } catch (e) {
+      // Clean up any uploaded files if we fail
+      if (videoUrl.isNotEmpty) {
+        try {
+          await _s3Service.deleteFile(videoUrl);
+        } catch (e) {
+          debugPrint('Error cleaning up video: $e');
+        }
+      }
+      rethrow;
     }
   }
 
   Future<void> deleteVideo(String videoUrl, String thumbnailUrl) async {
     try {
-      // Extract paths from URLs
-      final videoPath = _getPathFromUrl(videoUrl, _videoBucket);
-      final thumbnailPath = _getPathFromUrl(thumbnailUrl, _thumbnailBucket);
-
-      // Delete both files
       await Future.wait([
-        _supabase.storage.from(_videoBucket).remove([videoPath]),
-        _supabase.storage.from(_thumbnailBucket).remove([thumbnailPath]),
+        _s3Service.deleteFile(videoUrl),
+        _s3Service.deleteFile(thumbnailUrl),
       ]);
     } catch (e) {
-      print('Error deleting video: $e');
+      debugPrint('Error deleting video: $e');
       rethrow;
     }
-  }
-
-  String _getPathFromUrl(String url, String bucket) {
-    final uri = Uri.parse(url);
-    final pathSegments = uri.pathSegments;
-    return pathSegments.sublist(pathSegments.indexOf(bucket) + 1).join('/');
   }
 
   Future<void> cleanup() async {
     try {
       await VideoCompress.deleteAllCache();
     } catch (e) {
-      print('Error cleaning up video cache: $e');
+      debugPrint('Error cleaning up video cache: $e');
     }
   }
-}
-
-class CompressedVideoInfo {
-  final String path;
-  final String thumbnailPath;
-
-  CompressedVideoInfo({
-    required this.path,
-    required this.thumbnailPath,
-  });
-}
-
-class VideoUploadResult {
-  final String videoUrl;
-  final String thumbnailUrl;
-
-  VideoUploadResult({
-    required this.videoUrl,
-    required this.thumbnailUrl,
-  });
 }
 
 class VideoPreloadManager {
@@ -175,174 +141,182 @@ class VideoPreloadManager {
   factory VideoPreloadManager() => _instance;
   VideoPreloadManager._internal();
 
-  final Map<String, _PreloadedVideo> _preloadedVideos = {};
-  final Set<String> _currentlyPreloading = {};
-  int _currentIndex = 0;
-  static const int _preloadAhead = 2;
-  static const int _maxCachedVideos = 3;
+  final Map<String, String> _cachedVideoPaths = {};
+  final Map<String, DateTime> _lastAccessTimes = {};
+  final Map<String, int> _fileSizes = {};
+  static const int _maxCacheSizeBytes = 50 * 1024 * 1024; // 50 MB
+  int _currentCacheSize = 0;
+  Timer? _cleanupTimer;
+  bool _preloadingEnabled = false;
+  bool _isDisposed = false;
 
-  Future<void> updateCurrentIndex(int index, List<Map<String, dynamic>> posts) async {
-    if (_currentIndex == index) return;
-    _currentIndex = index;
-
-    try {
-      final neededUrls = <String>{};
-      if (index >= 0 && index < posts.length && posts[index]['media_type'] == 'video') {
-        final videoUrl = posts[index]['storage_path'];
-        if (videoUrl != null && videoUrl.isNotEmpty) {
-          neededUrls.add(videoUrl);
-        }
-      }
-      for (var i = index + 1; i < posts.length && i <= index + _preloadAhead; i++) {
-        if (posts[i]['media_type'] == 'video') {
-          final videoUrl = posts[i]['storage_path'];
-          if (videoUrl != null && videoUrl.isNotEmpty) {
-            neededUrls.add(videoUrl);
-          }
-        }
-      }
-
-      final urlsToRemove = _preloadedVideos.keys.where((url) => !neededUrls.contains(url)).toList();
-      for (final url in urlsToRemove) {
-        await _disposeVideo(url);
-      }
-
-      for (final url in neededUrls) {
-        if (!_preloadedVideos.containsKey(url) && !_currentlyPreloading.contains(url)) {
-          await _preloadVideo(url);
-          break;
-        }
-      }
-    } catch (e) {
-      print('Error updating preloaded videos: $e');
-    }
+  void setPaused(bool paused) {
+    _preloadingEnabled = !paused;
   }
 
-  Future<void> _preloadVideo(String url) async {
-    if (_currentlyPreloading.contains(url)) return;
-    if (_preloadedVideos.length >= _maxCachedVideos) return;
+  void updateCurrentIndex(int index, List<Map<String, dynamic>> posts) {
+    if (!_preloadingEnabled || _isDisposed) return;
     
-    try {
-      _currentlyPreloading.add(url);
-      
-      final controller = VideoPlayerController.networkUrl(
-        Uri.parse(url),
-        videoPlayerOptions: VideoPlayerOptions(
-          mixWithOthers: true,
-          allowBackgroundPlayback: false,
-        ),
-      );
-
-      await controller.initialize();
-      await controller.setLooping(true);
-      await controller.setVolume(0.0);
-      
-      _preloadedVideos[url] = _PreloadedVideo(
-        controller: controller,
-        timestamp: DateTime.now(),
-        aspectRatio: controller.value.aspectRatio,  // Store the aspect ratio
-      );
-    } catch (e) {
-      print('Error preloading video $url: $e');
-    } finally {
-      _currentlyPreloading.remove(url);
+    // Preload videos for the next few posts
+    for (var i = index; i < posts.length && i < index + 2; i++) {
+      final post = posts[i];
+      if (post['media_type'] == 'video' && post['storage_path'] != null) {
+        preloadVideo(post['storage_path']);
+      }
     }
   }
 
-  Future<VideoPlayerController?> getController(String url) async {
-    try {
-      // First try to get a preloaded controller
-      final video = _preloadedVideos[url];
-      if (video != null) {
-        try {
-          // Check if the preloaded controller is still valid
-          if (video.controller.value.isInitialized) {
-            return video.controller;
-          }
-        } catch (e) {
-          print('Error checking preloaded controller: $e');
-          // Controller is invalid, remove it
-          await _disposeVideo(url);
-        }
-      }
-
-      // Create a new controller
-      final controller = VideoPlayerController.networkUrl(
-        Uri.parse(url),
-        videoPlayerOptions: VideoPlayerOptions(
-          mixWithOthers: true,
-          allowBackgroundPlayback: false,
-        ),
-      );
-
-      // Initialize with retry logic
-      bool initialized = false;
-      int retryCount = 0;
-      const maxRetries = 2;
-
-      while (!initialized && retryCount < maxRetries) {
-        try {
-          await controller.initialize();
-          initialized = true;
-        } catch (e) {
-          print('Error initializing controller (attempt ${retryCount + 1}): $e');
-          retryCount++;
-          if (retryCount < maxRetries) {
-            await Future.delayed(Duration(milliseconds: 500 * retryCount));
-          }
-        }
-      }
-
-      if (!initialized) {
-        await controller.dispose();
-        return null;
-      }
-
-      await controller.setLooping(true);
-      await controller.setVolume(1.0);
-      
-      return controller;
-    } catch (e) {
-      print('Error in getController: $e');
-      return null;
-    }
+  void dispose() {
+    _isDisposed = true;
+    _preloadingEnabled = false;
+    _cleanupTimer?.cancel();
+    _cleanupAllCache();
   }
 
-  Future<void> _disposeVideo(String url) async {
-    final video = _preloadedVideos.remove(url);
-    if (video != null) {
+  Future<int> _getFileSize(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (await file.exists()) {
+        return await file.length();
+      }
+    } catch (e) {
+      debugPrint('Error getting file size: $e');
+    }
+    return 0;
+  }
+
+  Future<void> _cleanupAllCache() async {
+    for (var filePath in _cachedVideoPaths.values) {
       try {
-        await video.controller.pause();
-        await Future.delayed(const Duration(milliseconds: 50));
-        await video.controller.dispose();
+        final file = File(filePath);
+        if (await file.exists()) {
+          await file.delete();
+        }
       } catch (e) {
-        print('Error disposing video controller: $e');
+        debugPrint('Error cleaning up cached file: $e');
       }
     }
+    _cachedVideoPaths.clear();
+    _lastAccessTimes.clear();
+    _fileSizes.clear();
+    _currentCacheSize = 0;
   }
 
-  Future<void> dispose() async {
-    final urls = List<String>.from(_preloadedVideos.keys);
-    for (final url in urls) {
-      await _disposeVideo(url);
+  Future<String?> getCachedVideoPath(String url) async {
+    if (!_cachedVideoPaths.containsKey(url)) return null;
+    
+    _lastAccessTimes[url] = DateTime.now();
+    final path = _cachedVideoPaths[url];
+    
+    // Verify file still exists
+    if (path != null) {
+      final file = File(path);
+      if (await file.exists()) {
+        return path;
+      } else {
+        // File was deleted externally, remove from cache
+        _removeFromCache(url);
+      }
     }
-    _preloadedVideos.clear();
-    _currentlyPreloading.clear();
+    return null;
   }
 
-  double? getAspectRatioForUrl(String url) {
-    return _preloadedVideos[url]?.aspectRatio;
+  void _removeFromCache(String url) {
+    final size = _fileSizes.remove(url) ?? 0;
+    _currentCacheSize -= size;
+    _cachedVideoPaths.remove(url);
+    _lastAccessTimes.remove(url);
   }
-}
 
-class _PreloadedVideo {
-  final VideoPlayerController controller;
-  final DateTime timestamp;
-  final double? aspectRatio;  // Store the aspect ratio
+  Future<void> preloadVideo(String url) async {
+    if (!_preloadingEnabled || _isDisposed) return;
+    
+    if (_cachedVideoPaths.containsKey(url)) {
+      _lastAccessTimes[url] = DateTime.now();
+      return;
+    }
 
-  _PreloadedVideo({
-    required this.controller,
-    required this.timestamp,
-    this.aspectRatio,
-  });
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final fileName = url.split('/').last;
+      final filePath = '${tempDir.path}/$fileName';
+
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final fileSize = response.bodyBytes.length;
+        
+        // Clean up cache if needed before adding new file
+        while (_currentCacheSize + fileSize > _maxCacheSizeBytes && _cachedVideoPaths.isNotEmpty) {
+          await _removeOldestCache();
+        }
+
+        // Only proceed if we can fit the new file
+        if (fileSize <= _maxCacheSizeBytes) {
+          await File(filePath).writeAsBytes(response.bodyBytes);
+          _cachedVideoPaths[url] = filePath;
+          _lastAccessTimes[url] = DateTime.now();
+          _fileSizes[url] = fileSize;
+          _currentCacheSize += fileSize;
+        }
+      }
+
+      _startCleanupTimer();
+    } catch (e) {
+      debugPrint('Error preloading video: $e');
+    }
+  }
+
+  Future<void> _removeOldestCache() async {
+    if (_cachedVideoPaths.isEmpty) return;
+
+    final oldestUrl = _lastAccessTimes.entries
+        .reduce((a, b) => a.value.isBefore(b.value) ? a : b)
+        .key;
+
+    final filePath = _cachedVideoPaths[oldestUrl];
+    if (filePath != null) {
+      try {
+        final file = File(filePath);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (e) {
+        debugPrint('Error removing cached file: $e');
+      }
+    }
+
+    _removeFromCache(oldestUrl);
+  }
+
+  void _startCleanupTimer() {
+    _cleanupTimer?.cancel();
+    _cleanupTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
+      await _cleanupStaleCache();
+    });
+  }
+
+  Future<void> _cleanupStaleCache() async {
+    final now = DateTime.now();
+    final staleThreshold = const Duration(hours: 1);
+    
+    final staleUrls = _lastAccessTimes.entries
+        .where((entry) => now.difference(entry.value) > staleThreshold)
+        .map((entry) => entry.key)
+        .toList();
+
+    for (final url in staleUrls) {
+      final filePath = _cachedVideoPaths[url];
+      if (filePath != null) {
+        try {
+          final file = File(filePath);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (e) {
+          debugPrint('Error cleaning up stale cache: $e');
+        }
+      }
+      _removeFromCache(url);
+    }
+  }
 } 

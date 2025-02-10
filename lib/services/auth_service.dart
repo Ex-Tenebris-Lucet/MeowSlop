@@ -1,11 +1,13 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:typed_data';
 import 'video_service.dart';
+import 's3_service.dart';
+import 'package:flutter/foundation.dart';
 
 class AuthService {
   final SupabaseClient _supabase = Supabase.instance.client;
-  static const String _profilePicsBucket = 'profile_pictures';
-  static const String _postMediaBucket = 'post_media';
+  final VideoService _videoService = VideoService();
+  final S3Service _s3Service = S3Service();
 
   Future<bool> isLoggedIn() async {
     return _supabase.auth.currentSession != null;
@@ -85,27 +87,13 @@ class AuthService {
     final user = _supabase.auth.currentUser;
     if (user == null) throw Exception('Not logged in');
 
-    // Generate a unique file path for the image
-    final filePath = '${user.id}/${DateTime.now().millisecondsSinceEpoch}.jpg';
-
-    // Upload the image
-    await _supabase
-      .storage
-      .from(_profilePicsBucket)
-      .uploadBinary(
-        filePath,
-        imageBytes,
-        fileOptions: const FileOptions(
-          contentType: 'image/jpeg',
-          upsert: true,
-        ),
-      );
-
-    // Get the public URL
-    final imageUrl = _supabase
-      .storage
-      .from(_profilePicsBucket)
-      .getPublicUrl(filePath);
+    // Upload to S3
+    final imageUrl = await _s3Service.uploadBytes(
+      bytes: imageBytes,
+      fileName: '${user.id}_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      prefix: S3Service.profilePath,
+      contentType: 'image/jpeg',
+    );
 
     // Update the profile with the new image URL
     await updateProfile(profilePicUrl: imageUrl);
@@ -118,16 +106,8 @@ class AuthService {
     if (user == null) throw Exception('Not logged in');
 
     try {
-      // Extract the file path from the URL
-      final uri = Uri.parse(imageUrl);
-      final pathSegments = uri.pathSegments;
-      final filePath = pathSegments.sublist(pathSegments.indexOf(_profilePicsBucket) + 1).join('/');
-
-      // Delete the file
-      await _supabase
-        .storage
-        .from(_profilePicsBucket)
-        .remove([filePath]);
+      // Delete from S3
+      await _s3Service.deleteFile(imageUrl);
 
       // Update profile to remove the image URL
       await updateProfile(profilePicUrl: null);
@@ -165,27 +145,13 @@ class AuthService {
     final user = _supabase.auth.currentUser;
     if (user == null) throw Exception('Not logged in');
 
-    // Generate a unique file path
-    final filePath = '${user.id}/${DateTime.now().millisecondsSinceEpoch}.${mediaType == 'image' ? 'jpg' : 'mp4'}';
-
-    // Upload the media
-    await _supabase
-      .storage
-      .from(_postMediaBucket)
-      .uploadBinary(
-        filePath,
-        mediaBytes,
-        fileOptions: FileOptions(
-          contentType: mediaType == 'image' ? 'image/jpeg' : 'video/mp4',
-          upsert: true,
-        ),
-      );
-
-    // Get the public URL
-    final mediaUrl = _supabase
-      .storage
-      .from(_postMediaBucket)
-      .getPublicUrl(filePath);
+    // Upload to S3
+    final mediaUrl = await _s3Service.uploadBytes(
+      bytes: mediaBytes,
+      fileName: '${user.id}_${DateTime.now().millisecondsSinceEpoch}.${mediaType == 'image' ? 'jpg' : 'mp4'}',
+      prefix: S3Service.mediaPath,
+      contentType: mediaType == 'image' ? 'image/jpeg' : 'video/mp4',
+    );
 
     // Create the post record
     await _supabase
@@ -203,33 +169,46 @@ class AuthService {
   Future<String> uploadVideo(String videoPath) async {
     final user = _supabase.auth.currentUser;
     if (user == null) throw Exception('Not logged in');
-
-    final videoService = VideoService();
     
-    // Compress video and generate thumbnail
-    final compressedVideo = await videoService.compressVideo(videoPath);
-    if (compressedVideo == null) {
-      throw Exception('Failed to compress video');
-    }
+    try {
+      // Compress video and generate thumbnail
+      final compressedVideo = await _videoService.compressVideo(videoPath);
+      if (compressedVideo.isEmpty) {
+        throw Exception('Failed to compress video');
+      }
 
-    // Upload video and thumbnail
-    final uploadResult = await videoService.uploadVideo(compressedVideo, user.id);
-    if (uploadResult == null) {
-      throw Exception('Failed to upload video');
-    }
+      // Upload video and thumbnail
+      final uploadResult = await _videoService.uploadVideo(
+        compressedVideo,
+        null,  // Let VideoService generate the thumbnail
+        onProgress: (progress) {
+          // Handle progress if needed
+        },
+      );
 
-    // Create the post record
-    await _supabase
-      .from('media_items')
-      .insert({
-        'storage_path': uploadResult.videoUrl,
-        'thumbnail_url': uploadResult.thumbnailUrl,
-        'media_type': 'video',
+      final videoUrl = uploadResult['video_url'];
+      final thumbnailUrl = uploadResult['thumbnail_url'];
+      
+      if (videoUrl == null || thumbnailUrl == null) {
+        throw Exception('Failed to get URLs from upload result');
+      }
+
+      // Create the post in the database
+      await _supabase.from('media_items').insert({
         'owner_id': user.id,
+        'storage_path': videoUrl,
+        'thumbnail_url': thumbnailUrl,
+        'media_type': 'video',
         'created_at': DateTime.now().toIso8601String(),
       });
 
-    return uploadResult.videoUrl;
+      return videoUrl;
+    } catch (e, stackTrace) {
+      debugPrint('Error uploading video:');
+      debugPrint('Error: $e');
+      debugPrint('Stack trace: $stackTrace');
+      rethrow;
+    }
   }
 
   Future<void> deletePost(String postId, String mediaUrl) async {
@@ -244,29 +223,22 @@ class AuthService {
         .eq('id', postId)
         .single();
 
-      if (post['media_type'] == 'video' && post['thumbnail_url'] != null) {
-        // If it's a video, use VideoService to delete both video and thumbnail
-        final videoService = VideoService();
-        await videoService.deleteVideo(mediaUrl, post['thumbnail_url']);
-      } else {
-        // For images, just delete the media file
-        final uri = Uri.parse(mediaUrl);
-        final pathSegments = uri.pathSegments;
-        final filePath = pathSegments.sublist(pathSegments.indexOf(_postMediaBucket) + 1).join('/');
-
-        await _supabase
-          .storage
-          .from(_postMediaBucket)
-          .remove([filePath]);
-      }
-
-      // Delete the post record
+      // Delete the post record first
       await _supabase
         .from('media_items')
         .delete()
         .match({'id': postId});
+
+      // Then delete the files from S3
+      if (post['media_type'] == 'video' && post['thumbnail_url'] != null) {
+        // If it's a video, use VideoService to delete both video and thumbnail
+        await _videoService.deleteVideo(mediaUrl, post['thumbnail_url']);
+      } else {
+        // For images, just delete the media file
+        await _s3Service.deleteFile(mediaUrl);
+      }
     } catch (e) {
-      print('Error deleting post: $e');
+      debugPrint('Error deleting post: $e');
       rethrow;
     }
   }
@@ -290,7 +262,7 @@ class AuthService {
       // Take only the number of IDs we need
       final selectedIds = postIds.take(limit).toList();
 
-      // Now fetch the full post data for just these IDs
+      // Get the full post data for selected IDs with profiles join
       final response = await _supabase
         .from('media_items')
         .select('''
@@ -303,9 +275,10 @@ class AuthService {
         ''')
         .in_('id', selectedIds);
       
+      if (response == null) return [];
       return List<Map<String, dynamic>>.from(response);
     } catch (e) {
-      print('Error fetching random posts: $e');
+      print('Error getting random posts: $e');
       return [];
     }
   }

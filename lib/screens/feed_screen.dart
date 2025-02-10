@@ -45,6 +45,7 @@ class _FeedScreenState extends State<FeedScreen> {
   void initState() {
     super.initState();
     _updateSystemUI();
+    _videoPreloadManager.setPaused(false);  // Start preloading when feed opens
     _loadInitialPosts();
   }
 
@@ -168,7 +169,7 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   void dispose() {
-    _videoPreloadManager.dispose();
+    _videoPreloadManager.dispose();  // Only dispose when feed is actually closing
     _preloadedImages.clear();
     SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.edgeToEdge,
@@ -176,6 +177,34 @@ class _FeedScreenState extends State<FeedScreen> {
     );
     _pageController.dispose();
     super.dispose();
+  }
+
+  // Add method to handle navigation to profile
+  void _navigateToProfile(String? userId) {
+    _videoPreloadManager.setPaused(true);  // Pause preloading while in profile
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => 
+          UserProfileScreen(userId: userId),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          const begin = Offset(1.0, 0.0);
+          const end = Offset.zero;
+          const curve = Curves.easeOutExpo;
+          var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+          var offsetAnimation = animation.drive(tween);
+          return SlideTransition(
+            position: offsetAnimation,
+            child: child,
+          );
+        },
+        transitionDuration: const Duration(milliseconds: 100),
+      ),
+    ).then((_) {
+      // Resume preloading when returning from profile
+      if (mounted) {
+        _videoPreloadManager.setPaused(false);
+      }
+    });
   }
 
   @override
@@ -349,33 +378,23 @@ class _FeedScreenState extends State<FeedScreen> {
                       child: Container(
                         color: Colors.black,
                         child: isVideo
-                            ? LayoutBuilder(
-                                builder: (context, constraints) {
-                                  final videoAspectRatio = _videoPreloadManager
-                                      .getAspectRatioForUrl(imageUrl!);
-                                  
-                                  return AspectRatio(
-                                    aspectRatio: videoAspectRatio ?? 16/9,
-                                    child: VideoPlayerWidget(
-                                      url: imageUrl!,
-                                      autoPlay: true,
-                                      looping: true,
-                                      showOverlay: _showOverlay,
-                                      onTap: () {
-                                        final page = _pageController.page;
-                                        if (page != null && page % 1.0 != 0) {
-                                          // We're between pages, so snap to nearest
-                                          _pageController.animateToPage(
-                                            page.round(),
-                                            duration: const Duration(milliseconds: 1),
-                                            curve: Curves.linear,
-                                          ).then((_) => _toggleOverlay());
-                                        } else {
-                                          _toggleOverlay();
-                                        }
-                                      },
-                                    ),
-                                  );
+                            ? VideoPlayerWidget(
+                                url: imageUrl!,
+                                autoPlay: true,
+                                looping: true,
+                                showOverlay: _showOverlay,
+                                onTap: () {
+                                  final page = _pageController.page;
+                                  if (page != null && page % 1.0 != 0) {
+                                    // We're between pages, so snap to nearest
+                                    _pageController.animateToPage(
+                                      page.round(),
+                                      duration: const Duration(milliseconds: 1),
+                                      curve: Curves.linear,
+                                    ).then((_) => _toggleOverlay());
+                                  } else {
+                                    _toggleOverlay();
+                                  }
                                 },
                               )
                             : Image(
@@ -466,25 +485,7 @@ class _FeedScreenState extends State<FeedScreen> {
                                 child: GestureDetector(
                                   onTap: () {
                                     if (creator['id'] != null) {
-                                      Navigator.of(context).push(
-                                        PageRouteBuilder(
-                                          pageBuilder: (context, animation, secondaryAnimation) => 
-                                            UserProfileScreen(userId: creator['id']),
-                                          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                                            const begin = Offset(1.0, 0.0);
-                                            const end = Offset.zero;
-                                            const curve = Curves.easeOutExpo;
-                                            var tween = Tween(begin: begin, end: end)
-                                                .chain(CurveTween(curve: curve));
-                                            var offsetAnimation = animation.drive(tween);
-                                            return SlideTransition(
-                                              position: offsetAnimation,
-                                              child: child,
-                                            );
-                                          },
-                                          transitionDuration: const Duration(milliseconds: 100),
-                                        ),
-                                      );
+                                      _navigateToProfile(creator['id']);
                                     }
                                   },
                                   child: Row(

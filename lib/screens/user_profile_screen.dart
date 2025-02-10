@@ -5,6 +5,7 @@ import 'login_screen.dart';
 import '../services/auth_service.dart';
 import '../widgets/video_player_widget.dart';
 import '../services/video_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String? userId;  // null means viewing own profile
@@ -20,6 +21,8 @@ class UserProfileScreen extends StatefulWidget {
 
 class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindingObserver {
   final _authService = AuthService();
+  final _videoService = VideoService();
+  final _supabase = Supabase.instance.client;
   bool? _isLoggedIn;
   Map<String, dynamic>? _profile;
   bool _isEditing = false;
@@ -31,6 +34,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
   bool _isFollowing = false;
   List<Map<String, dynamic>>? _followers;
   List<Map<String, dynamic>>? _following;
+  bool _isUploading = false;
+  double _uploadProgress = 0.0;
 
   @override
   void initState() {
@@ -199,11 +204,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
 
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
+    
+    _formKey.currentState!.save();
 
     try {
       await _authService.updateProfile(
-        username: _usernameController.text,
-        tagline: _taglineController.text.isEmpty ? null : _taglineController.text,
+        tagline: _taglineController.text.trim(),
       );
       await _fetchProfile();
       if (mounted) {
@@ -436,14 +442,39 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
                 ],
               ),
               const SizedBox(height: 24),
-              Text(
-                _profile!['tagline'] ?? 'No bio yet',
-                style: TextStyle(
-                  color: _profile!['tagline'] != null ? Colors.white70 : Colors.white38,
-                  fontSize: 16,
-                  fontStyle: _profile!['tagline'] != null ? FontStyle.normal : FontStyle.italic,
+              if (_isEditing)
+                Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextFormField(
+                        controller: _taglineController,
+                        style: const TextStyle(color: Colors.white70),
+                        decoration: const InputDecoration(
+                          labelText: 'Bio',
+                          labelStyle: TextStyle(color: Colors.white70),
+                          enabledBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: Colors.white24),
+                          ),
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: Colors.white),
+                          ),
+                        ),
+                        maxLines: null,
+                      ),
+                    ],
+                  ),
+                )
+              else
+                Text(
+                  _profile!['tagline'] ?? 'No bio yet',
+                  style: TextStyle(
+                    color: _profile!['tagline'] != null ? Colors.white70 : Colors.white38,
+                    fontSize: 16,
+                    fontStyle: _profile!['tagline'] != null ? FontStyle.normal : FontStyle.italic,
+                  ),
                 ),
-              ),
               const SizedBox(height: 32),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -457,25 +488,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
               // Add Post Button - only show on own profile
               if (_isOwnProfile) ...[
                 Center(
-                  child: TextButton.icon(
-                    onPressed: _addNewPost,
-                    icon: const Icon(Icons.add_circle, color: Colors.white, size: 28),
-                    label: const Text(
-                      'Add Post',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                      side: const BorderSide(color: Colors.white24),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                    ),
-                  ),
+                  child: _buildAddPostButton(),
                 ),
                 const SizedBox(height: 24),
               ],
@@ -649,37 +662,71 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
   Future<void> _showPostDetails(Map<String, dynamic> post) async {
     final isVideo = post['media_type'] == 'video';
     
-    await showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
-        child: Stack(
-          alignment: Alignment.topRight,
-          children: [
-            if (isVideo)
-              VideoPlayerWidget(
-                url: post['storage_path'],
-                autoPlay: true,  // Start playing automatically
-                looping: true,   // Loop the video
-                showOverlay: false,  // Don't show overlay initially
-                onTap: () {
-                  Navigator.of(context).pop();  // Close dialog on tap
-                },
-              )
-            else
+    if (isVideo) {
+      await showDialog(
+        context: context,
+        barrierDismissible: true,
+        builder: (context) => WillPopScope(
+          onWillPop: () async {
+            Navigator.of(context).pop();
+            return false;
+          },
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: EdgeInsets.zero,
+            child: Stack(
+              alignment: Alignment.topRight,
+              children: [
+                VideoPlayerWidget(
+                  key: ValueKey('video-dialog-${post['id']}'),
+                  url: post['storage_path'],
+                  autoPlay: true,
+                  looping: true,
+                  showOverlay: false,
+                  onTap: () => Navigator.of(context).pop(),
+                ),
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 16,
+                  right: 16,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } else {
+      // Handle image posts
+      await showDialog(
+        context: context,
+        builder: (context) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.zero,
+          child: Stack(
+            alignment: Alignment.topRight,
+            children: [
               Image.network(
                 post['storage_path'],
                 fit: BoxFit.contain,
+                width: double.infinity,
+                height: double.infinity,
               ),
-            IconButton(
-              icon: const Icon(Icons.close, color: Colors.white),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-          ],
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 16,
+                right: 16,
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
-    );
+      );
+    }
   }
 
   Future<void> _showDeleteConfirmation(Map<String, dynamic> post) async {
@@ -795,50 +842,51 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
 
         final imageBytes = await image.readAsBytes();
         await _authService.uploadPost(imageBytes);
+        await _fetchPosts();
       } else {
         final XFile? video = await picker.pickVideo(
           source: ImageSource.gallery,
-          maxDuration: const Duration(minutes: 5), // Reasonable limit for a demo
+          maxDuration: const Duration(minutes: 5),
         );
 
         if (video == null) return;
         if (!mounted) return;
 
-        // Show compression progress
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Processing video...')),
-          );
-        }
+        setState(() {
+          _isUploading = true;
+          _uploadProgress = 0.0;
+        });
 
         try {
-          await _authService.uploadVideo(video.path);
+          final videoUrl = await _authService.uploadVideo(video.path);
+
+          await _fetchPosts();
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Post uploaded successfully')),
+            );
+          }
         } catch (e) {
           if (mounted) {
-            if (e.toString().contains('compression failed')) {
+            if (e.toString().contains('cancelled')) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Video compression failed. Try a shorter or smaller video.')),
-              );
-            } else if (e.toString().contains('size')) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Video is too large. Try a shorter video.')),
+                const SnackBar(content: Text('Upload cancelled')),
               );
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Error uploading video: ${e.toString()}')),
+                SnackBar(content: Text('Upload failed: ${e.toString()}')),
               );
             }
-            return;  // Return early on error
+          }
+        } finally {
+          if (mounted) {
+            setState(() {
+              _isUploading = false;
+              _uploadProgress = 0.0;
+            });
           }
         }
-      }
-
-      await _fetchPosts();
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Post uploaded successfully')),
-        );
       }
     } catch (e) {
       if (mounted) {
@@ -1136,5 +1184,61 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
         );
       }
     }
+  }
+
+  Widget _buildAddPostButton() {
+    if (_isUploading) {
+      return Column(
+        children: [
+          LinearProgressIndicator(
+            value: _uploadProgress,
+            backgroundColor: Colors.white24,
+            valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+          ),
+          const SizedBox(height: 16),
+          TextButton.icon(
+            onPressed: () {
+              _videoService.cancelUpload();
+            },
+            icon: const Icon(Icons.cancel, color: Colors.red, size: 28),
+            label: const Text(
+              'Cancel Upload',
+              style: TextStyle(
+                color: Colors.red,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              side: const BorderSide(color: Colors.red),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return TextButton.icon(
+      onPressed: _addNewPost,
+      icon: const Icon(Icons.add_circle, color: Colors.white, size: 28),
+      label: const Text(
+        'Add Post',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 16,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+        side: const BorderSide(color: Colors.white24),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+    );
   }
 } 

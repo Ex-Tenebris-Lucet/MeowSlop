@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
-import 'package:chewie/chewie.dart';
 import '../services/video_service.dart';
+import 'dart:io';
+import 'package:visibility_detector/visibility_detector.dart';
 
 class VideoPlayerWidget extends StatefulWidget {
   final String url;
@@ -9,7 +10,6 @@ class VideoPlayerWidget extends StatefulWidget {
   final bool looping;
   final bool showOverlay;
   final VoidCallback? onTap;
-
 
   const VideoPlayerWidget({
     super.key,
@@ -25,14 +25,15 @@ class VideoPlayerWidget extends StatefulWidget {
 }
 
 class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindingObserver {
-  VideoPlayerController? _videoPlayerController;
-  ChewieController? _chewieController;
+  VideoPlayerController? _controller;
   bool _isInitialized = false;
   bool _hasError = false;
   int _retryCount = 0;
   static const int _maxRetries = 2;
   bool _isDisposed = false;
+  String? _lastError;
   bool _showDebugInfo = false;
+  bool _isVisible = true;
 
   @override
   void initState() {
@@ -44,8 +45,22 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindi
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.paused) {
-      _videoPlayerController?.pause();
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _pauseVideo();
+    } else if (state == AppLifecycleState.resumed && widget.autoPlay && !widget.showOverlay && _isVisible) {
+      _playVideo();
+    }
+  }
+
+  void _pauseVideo() {
+    if (_controller?.value.isPlaying ?? false) {
+      _controller?.pause();
+    }
+  }
+
+  void _playVideo() {
+    if (!(_controller?.value.isPlaying ?? true) && _isInitialized && !_hasError && !_isDisposed) {
+      _controller?.play();
     }
   }
 
@@ -54,96 +69,89 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindi
     super.didUpdateWidget(oldWidget);
     
     if (oldWidget.url != widget.url) {
-      _disposeControllers();
+      _disposeController();
       _retryCount = 0;
       _initializePlayer();
     }
     
     if (widget.showOverlay != oldWidget.showOverlay) {
       if (widget.showOverlay) {
-        _videoPlayerController?.pause();
-      } else if (widget.autoPlay && _isInitialized && !_hasError) {
-        _videoPlayerController?.play();
+        _pauseVideo();
+      } else if (widget.autoPlay && _isInitialized && !_hasError && _isVisible) {
+        _playVideo();
       }
     }
   }
 
-  void _disposeControllers() {
+  Future<void> _disposeController() async {
     if (_isDisposed) return;
     
-    _chewieController?.dispose();
-    _chewieController = null;
-    if (_videoPlayerController != null) {
-      _videoPlayerController!.pause().then((_) {
-        if (mounted && !_isDisposed) {
-          _videoPlayerController!.dispose();
-          _videoPlayerController = null;
-          _isInitialized = false;
-          _hasError = false;
+    final controller = _controller;
+    _controller = null;
+    _isInitialized = false;
+    
+    try {
+      if (controller != null) {
+        if (controller.value.isPlaying) {
+          await controller.pause();
         }
-      });
+        await controller.dispose();
+      }
+    } catch (e) {
+      debugPrint('Error disposing controller: $e');
     }
   }
 
   Future<void> _initializePlayer() async {
     if (_isDisposed) return;
     
+    await _disposeController();
+    
     try {
-      // Try to get a preloaded controller first
-      var controller = await VideoPreloadManager().getController(widget.url);
+      var cachedPath = await VideoPreloadManager().getCachedVideoPath(widget.url);
       
-      // If no preloaded controller, create a new one
-      if (controller == null) {
-        controller = VideoPlayerController.networkUrl(
-          Uri.parse(widget.url),
-          videoPlayerOptions: VideoPlayerOptions(
-            mixWithOthers: true,
-            allowBackgroundPlayback: false,
-          ),
+      if (cachedPath != null) {
+        _controller = VideoPlayerController.file(
+          File(cachedPath),
+          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
         );
-        
-        // Add listener for network errors
-        controller.addListener(() {
-          if (!mounted || _isDisposed) return;
-          
-          final playerValue = controller?.value;
-          if (playerValue != null && playerValue.hasError && !_hasError) {
-            setState(() {
-              _hasError = true;
-              if (_retryCount < _maxRetries) {
-                _retryCount++;
-                Future.delayed(Duration(milliseconds: 500 * _retryCount), () {
-                  if (mounted && !_isDisposed) {
-                    _initializePlayer();
-                  }
-                });
-              }
-            });
-          }
-        });
-        
-        await controller.initialize();
-        await controller.setLooping(true);
+      } else {
+        _controller = VideoPlayerController.networkUrl(
+          Uri.parse(widget.url),
+          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+        );
+        // Start preloading for next time
+        VideoPreloadManager().preloadVideo(widget.url);
+      }
+
+      await _controller!.initialize();
+      _controller!.setLooping(widget.looping);
+      
+      if (widget.autoPlay && !widget.showOverlay && _isVisible) {
+        _controller!.play();
+      } else {
+        _controller!.pause();
       }
 
       if (!mounted || _isDisposed) {
-        controller.dispose();
+        await _controller?.pause();
+        await _controller?.dispose();
         return;
       }
 
       setState(() {
-        _videoPlayerController = controller;
-        _initializeChewieController();
         _isInitialized = true;
         _hasError = false;
         _retryCount = 0;
+        _lastError = null;
       });
     } catch (e) {
-      print('Error initializing video player: $e');
+      debugPrint('Error initializing video player: $e');
       if (mounted && !_isDisposed) {
+        _lastError = e.toString();
         if (_retryCount < _maxRetries) {
           _retryCount++;
-          print('Retrying video initialization (attempt $_retryCount)');
+          debugPrint('Retrying video initialization (attempt $_retryCount)');
           await Future.delayed(Duration(milliseconds: 500 * _retryCount));
           _initializePlayer();
         } else {
@@ -156,93 +164,62 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindi
     }
   }
 
-  void _initializeChewieController() {
-    if (_videoPlayerController == null) return;
-    
-    _chewieController?.dispose();
-    _chewieController = ChewieController(
-      videoPlayerController: _videoPlayerController!,
-      autoPlay: widget.autoPlay && !_hasError,
-      looping: widget.looping,
-      showControls: false,
-      autoInitialize: false,
-      allowMuting: false,
-      allowPlaybackSpeedChanging: false,
-      showOptions: false,
-      errorBuilder: (context, errorMessage) {
-        // Attempt to recover from Chewie errors
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted && _retryCount < _maxRetries) {
-            _retryCount++;
-            _initializePlayer();
-          }
-        });
-        
-        return Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(
-                Icons.error_outline,
-                color: Colors.white24,
-                size: 48,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Error loading video: $errorMessage',
-                style: const TextStyle(color: Colors.white70),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _toggleDebugInfo() {
-    setState(() {
-      _showDebugInfo = !_showDebugInfo;
-    });
-  }
-
   String _getDebugInfo() {
-    if (_videoPlayerController == null) return 'No controller';
-    final value = _videoPlayerController!.value;
+    if (_controller == null) return '';
+    final videoSize = _controller!.value.size;
+    final viewSize = MediaQuery.of(context).size;
+    final aspectRatio = videoSize.width / videoSize.height;
     return '''
-    Size: ${value.size.width.toInt()}x${value.size.height.toInt()}
-    Aspect Ratio: ${value.aspectRatio.toStringAsFixed(2)}
-    Position: ${value.position.inSeconds}s
-    Duration: ${value.duration.inSeconds}s
-    Playing: ${value.isPlaying}
-    Buffered: ${value.buffered.length}
-    URL: ${widget.url}
+    Video: ${videoSize.width.toInt()}x${videoSize.height.toInt()}
+    Screen: ${viewSize.width.toInt()}x${viewSize.height.toInt()}
+    Ratio: ${aspectRatio.toStringAsFixed(2)}
     ''';
   }
 
   @override
   Widget build(BuildContext context) {
+    return VisibilityDetector(
+      key: Key('video-${widget.url}'),
+      onVisibilityChanged: (info) {
+        final isVisible = info.visibleFraction > 0.1;
+        if (isVisible != _isVisible) {
+          setState(() {
+            _isVisible = isVisible;
+          });
+          if (!isVisible) {
+            _pauseVideo();
+          } else if (widget.autoPlay && !widget.showOverlay) {
+            _playVideo();
+          }
+        }
+      },
+      child: _buildVideoPlayer(),
+    );
+  }
+
+  Widget _buildVideoPlayer() {
     if (_hasError) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
+            const Icon(
               Icons.error_outline,
               color: Colors.white24,
               size: 48,
             ),
-            SizedBox(height: 8),
+            const SizedBox(height: 8),
             Text(
-              'Error playing video',
-              style: TextStyle(color: Colors.white70),
+              'Error playing video${_lastError != null ? '\n$_lastError' : ''}',
+              style: const TextStyle(color: Colors.white70),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
       );
     }
 
-    if (!_isInitialized) {
+    if (!_isInitialized || _controller == null) {
       return const Center(
         child: CircularProgressIndicator(
           valueColor: AlwaysStoppedAnimation<Color>(Colors.white24),
@@ -252,13 +229,37 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindi
 
     return GestureDetector(
       onTap: widget.onTap,
-      child: _chewieController != null
-          ? Chewie(controller: _chewieController!)
-          : const Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white24),
+      onLongPress: () => setState(() => _showDebugInfo = !_showDebugInfo),
+      child: Stack(
+        children: [
+          Center(
+            child: AspectRatio(
+              aspectRatio: _controller!.value.aspectRatio,
+              child: VideoPlayer(_controller!),
+            ),
+          ),
+          if (_showDebugInfo)
+            Positioned(
+              top: 40,
+              left: 20,
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _getDebugInfo(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                  ),
+                ),
               ),
             ),
+        ],
+      ),
     );
   }
 
@@ -266,7 +267,14 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> with WidgetsBindi
   void dispose() {
     _isDisposed = true;
     WidgetsBinding.instance.removeObserver(this);
-    _disposeControllers();
+    _disposeController();
     super.dispose();
+  }
+
+  @override
+  void deactivate() {
+    // This is called when the widget is removed from the widget tree
+    _pauseVideo();
+    super.deactivate();
   }
 } 
