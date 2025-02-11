@@ -194,15 +194,17 @@ serve(async (req) => {
         
       console.log('Videos with tags:', taggedMedia?.length);
 
-      // Get all untagged videos
+      // Get all untagged videos using left join
       const { data: untaggedMedia, error: untaggedError } = await supabase
         .from('media_items')
-        .select('id')
+        .select(`
+          id,
+          media_item_tags!left (
+            media_item_id
+          )
+        `)
         .eq('media_type', 'video')
-        .not('id', 'in', (
-          supabase.from('media_item_tags')
-            .select('media_item_id')
-        ))
+        .is('media_item_tags.media_item_id', null)
         .limit(10);
 
       if (videoError) console.error('Error getting videos:', videoError);
