@@ -164,20 +164,41 @@ serve(async (req) => {
     const { mediaId, batchProcess } = await req.json();
 
     if (batchProcess) {
-      // Get all untagged media
+      // Verify AWS credentials first
+      try {
+        const testCommand = new GetLabelDetectionCommand({ JobId: 'test' });
+        await rekognition.send(testCommand);
+      } catch (error: any) {
+        if (error.name === 'UnrecognizedClientException') {
+          return new Response(
+            JSON.stringify({ error: 'AWS credentials are invalid' }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+      }
+
+      // Get all untagged videos (not images)
       const { data: untaggedMedia } = await supabase
         .from('media_items')
         .select('id')
+        .eq('media_type', 'video')  // Only get videos
         .not('id', 'in', (
           supabase.from('media_item_tags')
             .select('media_item_id')
-        ));
+        ))
+        .limit(10);  // Process in smaller batches to avoid timeouts
 
       const results = [];
       for (const item of untaggedMedia || []) {
-        results.push(await tagSingleMedia(item.id));
-        // Small delay to avoid rate limits
-        await new Promise(r => setTimeout(r, 1000));
+        try {
+          results.push(await tagSingleMedia(item.id));
+          // Small delay to avoid rate limits
+          await new Promise(r => setTimeout(r, 1000));
+        } catch (error) {
+          console.error(`Failed to process media ${item.id}:`, error);
+          results.push({ error: error.message, mediaId: item.id });
+          continue;  // Continue with next item even if one fails
+        }
       }
 
       return new Response(

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 's3_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class VideoService {
   static final VideoService _instance = VideoService._internal();
@@ -13,6 +14,7 @@ class VideoService {
   VideoService._internal();
   
   final _s3Service = S3Service();
+  final _supabase = Supabase.instance.client;
   bool _isCancelled = false;
   double _uploadProgress = 0.0;
   
@@ -132,6 +134,22 @@ class VideoService {
       await VideoCompress.deleteAllCache();
     } catch (e) {
       debugPrint('Error cleaning up video cache: $e');
+    }
+  }
+
+  Future<void> triggerVideoAnalysis(String mediaId) async {
+    try {
+      final response = await _supabase.functions.invoke(
+        'video-analysis',
+        body: {'mediaId': mediaId},
+      );
+      
+      if (response.status != 200) {
+        debugPrint('Video analysis failed: ${response.data}');
+      }
+    } catch (e) {
+      debugPrint('Error triggering video analysis: $e');
+      // Don't throw - we don't want to break the upload if analysis fails
     }
   }
 }
