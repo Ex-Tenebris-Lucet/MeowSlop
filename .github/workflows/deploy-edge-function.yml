@@ -1,0 +1,27 @@
+name: Deploy Edge Function
+
+on:
+  push:
+    paths:
+      - 'supabase/functions/video-analysis/**'
+    branches:
+      - main  # or whatever your main branch is called
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy Edge Function
+        run: |
+          supabase functions deploy video-analysis
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }} 

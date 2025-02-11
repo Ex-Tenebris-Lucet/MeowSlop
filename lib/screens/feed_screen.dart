@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import '../services/auth_service.dart';
 import '../services/video_service.dart';
 import 'user_profile_screen.dart';
+import 'login_screen.dart';
 import '../widgets/video_player_widget.dart';
+import 'dart:io';
 
 // Add custom scroll behavior
 class SnappyScrollBehavior extends ScrollBehavior {
@@ -37,9 +39,10 @@ class _FeedScreenState extends State<FeedScreen> {
   );
   bool _showOverlay = false;
   final Map<String, ImageProvider> _preloadedImages = {};
-  static const _preloadAhead = 3;
+  static const _preloadAhead = 5;
   static const _maxCacheSize = 20;
   final Set<String> _seenPostIds = {};
+  final Map<String, String> _cachedFilePaths = {};
 
   @override
   void initState() {
@@ -112,19 +115,22 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
-  void _preloadImages(int startIndex) {
-    // Clean up cache if it's too large
-    if (_preloadedImages.length > _maxCacheSize) {
-      // Create a list of keys to remove first
-      final keysToRemove = _preloadedImages.keys
-          .take(_preloadedImages.length - _maxCacheSize)
-          .toList();  // Convert to list to avoid concurrent modification
-      // Remove the keys in a separate step
-      for (final key in keysToRemove) {
-        _preloadedImages.remove(key);
+  Future<void> _preloadImages(int startIndex) async {
+    // Remove old cached files if we exceed the max cache size
+    while (_cachedFilePaths.length > _maxCacheSize) {
+      final oldestKey = _cachedFilePaths.keys.first;
+      final oldestPath = _cachedFilePaths.remove(oldestKey);
+      if (oldestPath != null) {
+        try {
+          await File(oldestPath).delete();
+        } catch (e) {
+          debugPrint('Error deleting old cached file: $e');
+        }
       }
+      _preloadedImages.remove(oldestKey);
     }
 
+    // Preload next set of images
     for (var i = startIndex; i < _posts.length && i < startIndex + _preloadAhead; i++) {
       final post = _posts[i];
       final isVideo = post['media_type'] == 'video';
@@ -136,11 +142,11 @@ class _FeedScreenState extends State<FeedScreen> {
           final imageProvider = NetworkImage(url);
           _preloadedImages[url] = imageProvider;
           precacheImage(imageProvider, context).catchError((e) {
-            print('Error preloading image: $e');
+            debugPrint('Error preloading image: $e');
             _preloadedImages.remove(url);
           });
         } catch (e) {
-          print('Error setting up image preload: $e');
+          debugPrint('Error setting up image preload: $e');
         }
       }
     }
@@ -169,23 +175,32 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   void dispose() {
-    _videoPreloadManager.dispose();  // Only dispose when feed is actually closing
-    _preloadedImages.clear();
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.edgeToEdge,
-      overlays: SystemUiOverlay.values,
-    );
     _pageController.dispose();
+    _videoPreloadManager.dispose();
+    _clearImageCache();
     super.dispose();
   }
 
+  void _clearImageCache() {
+    // Clear cached images and file paths
+    _preloadedImages.clear();
+    for (var path in _cachedFilePaths.values) {
+      try {
+        File(path).deleteSync();
+      } catch (e) {
+        debugPrint('Error deleting cached file: $e');
+      }
+    }
+    _cachedFilePaths.clear();
+  }
+
   // Add method to handle navigation to profile
-  void _navigateToProfile(String? userId) {
+  void _navigateToProfile(String creatorId) {
     _videoPreloadManager.setPaused(true);  // Pause preloading while in profile
     Navigator.of(context).push(
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) => 
-          UserProfileScreen(userId: userId),
+          UserProfileScreen(userId: creatorId),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           const begin = Offset(1.0, 0.0);
           const end = Offset.zero;
@@ -225,8 +240,8 @@ class _FeedScreenState extends State<FeedScreen> {
     final bottomPadding = MediaQuery.of(context).padding.bottom;
 
     if (_posts.isEmpty) {
-    return Scaffold(
-      backgroundColor: Colors.black,
+      return Scaffold(
+        backgroundColor: Colors.black,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
@@ -237,29 +252,34 @@ class _FeedScreenState extends State<FeedScreen> {
                 color: Colors.white,
                 size: 28,
               ),
-              onPressed: () {
-                Navigator.of(context).push(
-                  PageRouteBuilder(
-                    pageBuilder: (context, animation, secondaryAnimation) => const UserProfileScreen(),
-                    transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                      const begin = Offset(1.0, 0.0);
-                      const end = Offset.zero;
-                      const curve = Curves.easeOutExpo;
-                      var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-                      var offsetAnimation = animation.drive(tween);
-                      return SlideTransition(
-                        position: offsetAnimation,
-                        child: child,
-                      );
-                    },
-                    transitionDuration: const Duration(milliseconds: 100),
-                  ),
-                );
+              onPressed: () async {
+                final currentProfile = await _authService.getProfile();
+                if (currentProfile != null && mounted) {
+                  final userId = currentProfile['id'] as String;
+                  Navigator.of(context).push(
+                    PageRouteBuilder(
+                      pageBuilder: (context, animation, secondaryAnimation) => 
+                        UserProfileScreen(userId: userId),
+                      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                        const begin = Offset(1.0, 0.0);
+                        const end = Offset.zero;
+                        const curve = Curves.easeOutExpo;
+                        var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+                        var offsetAnimation = animation.drive(tween);
+                        return SlideTransition(
+                          position: offsetAnimation,
+                          child: child,
+                        );
+                      },
+                      transitionDuration: const Duration(milliseconds: 100),
+                    ),
+                  );
+                }
               },
             ),
           ],
         ),
-      body: Center(
+        body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -271,7 +291,7 @@ class _FeedScreenState extends State<FeedScreen> {
               const SizedBox(height: 16),
               const Text(
                 'No posts available',
-          style: TextStyle(
+                style: TextStyle(
                   color: Colors.white70,
                   fontSize: 18,
                 ),
@@ -457,24 +477,53 @@ class _FeedScreenState extends State<FeedScreen> {
                                     color: Colors.white,
                                     size: 28,
                                   ),
-                                  onPressed: () {
-                                    Navigator.of(context).push(
-                                      PageRouteBuilder(
-                                        pageBuilder: (context, animation, secondaryAnimation) => const UserProfileScreen(),
-                                        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                                          const begin = Offset(1.0, 0.0);
-                                          const end = Offset.zero;
-                                          const curve = Curves.easeOutExpo;
-                                          var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-                                          var offsetAnimation = animation.drive(tween);
-                                          return SlideTransition(
-                                            position: offsetAnimation,
-                                            child: child,
-                                          );
-                                        },
-                                        transitionDuration: const Duration(milliseconds: 100),
-                                      ),
-                                    );
+                                  onPressed: () async {
+                                    final isLoggedIn = await _authService.isLoggedIn();
+                                    if (!isLoggedIn) {
+                                      if (!mounted) return;
+                                      Navigator.of(context).push(
+                                        PageRouteBuilder(
+                                          pageBuilder: (context, animation, secondaryAnimation) => 
+                                            const LoginScreen(),
+                                          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                                            const begin = Offset(1.0, 0.0);
+                                            const end = Offset.zero;
+                                            const curve = Curves.easeOutExpo;
+                                            var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+                                            var offsetAnimation = animation.drive(tween);
+                                            return SlideTransition(
+                                              position: offsetAnimation,
+                                              child: child,
+                                            );
+                                          },
+                                          transitionDuration: const Duration(milliseconds: 100),
+                                        ),
+                                      );
+                                      return;
+                                    }
+
+                                    final currentProfile = await _authService.getProfile();
+                                    if (currentProfile != null && mounted) {
+                                      final currentUserId = currentProfile['id'] as String;
+                                      Navigator.of(context).push(
+                                        PageRouteBuilder(
+                                          pageBuilder: (context, animation, secondaryAnimation) => 
+                                            UserProfileScreen(userId: currentUserId),
+                                          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                                            const begin = Offset(1.0, 0.0);
+                                            const end = Offset.zero;
+                                            const curve = Curves.easeOutExpo;
+                                            var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+                                            var offsetAnimation = animation.drive(tween);
+                                            return SlideTransition(
+                                              position: offsetAnimation,
+                                              child: child,
+                                            );
+                                          },
+                                          transitionDuration: const Duration(milliseconds: 100),
+                                        ),
+                                      );
+                                    }
                                   },
                                 ),
                               ),
@@ -485,7 +534,8 @@ class _FeedScreenState extends State<FeedScreen> {
                                 child: GestureDetector(
                                   onTap: () {
                                     if (creator['id'] != null) {
-                                      _navigateToProfile(creator['id']);
+                                      final creatorId = creator['id'] as String;
+                                      _navigateToProfile(creatorId);
                                     }
                                   },
                                   child: Row(

@@ -245,24 +245,7 @@ class AuthService {
 
   Future<List<Map<String, dynamic>>> getRandomPosts({int limit = 10}) async {
     try {
-      // First, get all post IDs
-      final idResponse = await _supabase
-        .from('media_items')
-        .select('id')
-        .limit(500); // Limit the pool size for performance
-      
-      if (idResponse == null || idResponse.isEmpty) {
-        return [];
-      }
-
-      // Convert to list and shuffle
-      final postIds = List<String>.from(idResponse.map((row) => row['id']));
-      postIds.shuffle();
-
-      // Take only the number of IDs we need
-      final selectedIds = postIds.take(limit).toList();
-
-      // Get the full post data for selected IDs with profiles join
+      // Get ALL posts with their profile info
       final response = await _supabase
         .from('media_items')
         .select('''
@@ -273,12 +256,18 @@ class AuthService {
             profile_pic_url
           )
         ''')
-        .in_('id', selectedIds);
+        .order('created_at', ascending: false);  // Keep chronological order as fallback
       
       if (response == null) return [];
-      return List<Map<String, dynamic>>.from(response);
+      
+      // Shuffle all posts
+      final allPosts = List<Map<String, dynamic>>.from(response);
+      allPosts.shuffle();
+      
+      // Return only the requested number
+      return allPosts.take(limit).toList();
     } catch (e) {
-      print('Error getting random posts: $e');
+      debugPrint('Error getting random posts: $e');
       return [];
     }
   }

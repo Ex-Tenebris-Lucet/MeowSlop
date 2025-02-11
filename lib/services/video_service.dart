@@ -158,7 +158,7 @@ class VideoPreloadManager {
     if (!_preloadingEnabled || _isDisposed) return;
     
     // Preload videos for the next few posts
-    for (var i = index; i < posts.length && i < index + 2; i++) {
+    for (var i = index; i < posts.length && i < index + 5; i++) {
       final post = posts[i];
       if (post['media_type'] == 'video' && post['storage_path'] != null) {
         preloadVideo(post['storage_path']);

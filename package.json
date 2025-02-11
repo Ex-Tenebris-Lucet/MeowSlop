@@ -1,0 +1,12 @@
+{
+  "dependencies": {
+    "@aws-sdk/client-rekognition": "^3.744.0",
+    "@supabase/supabase-js": "^2.48.1"
+  },
+  "scripts": {
+    "supabase": "supabase"
+  },
+  "devDependencies": {
+    "supabase": "^2.12.0"
+  }
+}

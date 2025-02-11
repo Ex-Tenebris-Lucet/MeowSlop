@@ -27,6 +27,23 @@ create table if not exists media_items (
   owner_id uuid references profiles(id) not null
 );
 
+-- New tag system
+create table if not exists tags (
+    id uuid primary key default uuid_generate_v4(),
+    name text not null unique,  -- Ensures each tag exists only once
+);
+
+create table if not exists media_item_tags (
+    media_item_id uuid references media_items(id) on delete cascade,
+    tag_id uuid references tags(id) on delete cascade,
+    primary key (media_item_id, tag_id)  -- Ensures unique media-tag combinations
+);
+
+-- Add indexes for better query performance on tags
+create index if not exists idx_media_item_tags_media_item on media_item_tags(media_item_id);
+create index if not exists idx_media_item_tags_tag on media_item_tags(tag_id);
+create index if not exists idx_tags_name on tags(name);
+
 -- Create followers table for following functionality
 create table if not exists followers (
   follower_id uuid references profiles(id) not null,

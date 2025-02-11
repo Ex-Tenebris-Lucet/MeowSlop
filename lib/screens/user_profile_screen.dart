@@ -8,11 +8,11 @@ import '../services/video_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class UserProfileScreen extends StatefulWidget {
-  final String? userId;  // null means viewing own profile
+  final String userId;  // The ID of the user whose profile to show
   
   const UserProfileScreen({
-    super.key, 
-    this.userId,  // Optional - if not provided, shows current user's profile
+    super.key,
+    required this.userId,
   });
 
   @override
@@ -76,18 +76,28 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
     if (mounted) {
       setState(() {
         _isLoggedIn = loggedIn;
-        _isOwnProfile = widget.userId == null;
       });
+      
       if (loggedIn) {
-        _fetchProfile();
+        // Get current user's profile to compare IDs
+        final currentProfile = await _authService.getProfile();
+        if (mounted) {
+          setState(() {
+            _isOwnProfile = currentProfile != null && widget.userId == currentProfile['id'];
+          });
+        }
+      } else {
+        setState(() {
+          _isOwnProfile = false;
+        });
       }
+      // Always fetch the profile data
+      _fetchProfile();
     }
   }
 
   Future<void> _fetchProfile() async {
-    final profile = widget.userId != null 
-      ? await _authService.getUserProfile(widget.userId!)
-      : await _authService.getProfile();
+    final profile = await _authService.getUserProfile(widget.userId);
       
     if (mounted) {
       setState(() {
@@ -98,7 +108,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
         }
       });
       _fetchPosts();
-      if (!_isOwnProfile && widget.userId != null) {
+      if (!_isOwnProfile) {
         _checkFollowingStatus();
       }
       _fetchFollowCounts();
@@ -107,7 +117,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
 
   Future<void> _checkFollowingStatus() async {
     if (widget.userId != null) {
-      final isFollowing = await _authService.isFollowing(widget.userId!);
+      final isFollowing = await _authService.isFollowing(widget.userId);
       if (mounted) {
         setState(() {
           _isFollowing = isFollowing;
@@ -118,28 +128,23 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
 
   Future<void> _fetchFollowCounts() async {
     if (_profile != null) {
-      final userId = widget.userId ?? (await _authService.getProfile())?['id'];
-      if (userId != null) {
-        final followers = await _authService.getFollowers(userId);
-        final following = await _authService.getFollowing(userId);
-        if (mounted) {
-          setState(() {
-            _followers = followers;
-            _following = following;
-          });
-        }
+      final followers = await _authService.getFollowers(widget.userId);
+      final following = await _authService.getFollowing(widget.userId);
+      if (mounted) {
+        setState(() {
+          _followers = followers;
+          _following = following;
+        });
       }
     }
   }
 
   Future<void> _toggleFollow() async {
-    if (widget.userId == null) return;
-
     try {
       if (_isFollowing) {
-        await _authService.unfollowUser(widget.userId!);
+        await _authService.unfollowUser(widget.userId);
       } else {
-        await _authService.followUser(widget.userId!);
+        await _authService.followUser(widget.userId);
       }
       await _fetchProfile();
       await _checkFollowingStatus();
@@ -274,114 +279,24 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
               ]
             : null,
       ),
-      body: _isLoggedIn! ? _buildLoggedInView() : _buildAnonymousView(context),
+      body: _profile == null ? _buildLoadingView() : _buildProfileView(),
     );
   }
 
-  Widget _buildAnonymousView(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text(
-            "You're not logged in",
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-            ),
-          ),
-          const SizedBox(height: 20),
-          // Sign Up Button
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).push(
-                PageRouteBuilder(
-                  pageBuilder: (context, animation, secondaryAnimation) => 
-                    const SignupScreen(),
-                  transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                    const begin = Offset(1.0, 0.0);
-                    const end = Offset.zero;
-                    const curve = Curves.easeOutExpo;
-                    var tween = Tween(begin: begin, end: end)
-                        .chain(CurveTween(curve: curve));
-                    var offsetAnimation = animation.drive(tween);
-                    return SlideTransition(
-                      position: offsetAnimation,
-                      child: child,
-                    );
-                  },
-                  transitionDuration: const Duration(milliseconds: 100),
-                ),
-              );
-            },
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-              backgroundColor: Colors.white,
-            ),
-            child: const Text(
-              'Create an Account',
-              style: TextStyle(
-                color: Colors.black,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          // Login Button
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).push(
-                PageRouteBuilder(
-                  pageBuilder: (context, animation, secondaryAnimation) => 
-                    const LoginScreen(),
-                  transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                    const begin = Offset(1.0, 0.0);
-                    const end = Offset.zero;
-                    const curve = Curves.easeOutExpo;
-                    var tween = Tween(begin: begin, end: end)
-                        .chain(CurveTween(curve: curve));
-                    var offsetAnimation = animation.drive(tween);
-                    return SlideTransition(
-                      position: offsetAnimation,
-                      child: child,
-                    );
-                  },
-                  transitionDuration: const Duration(milliseconds: 100),
-                ),
-              );
-            },
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-              side: const BorderSide(color: Colors.white),
-            ),
-            child: const Text(
-              'Log In',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-              ),
-            ),
-          ),
-        ],
+  Widget _buildLoadingView() {
+    return const Center(
+      child: CircularProgressIndicator(
+        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
       ),
     );
   }
 
-  Widget _buildLoggedInView() {
-    if (_profile == null) {
-      return const Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-        ),
-      );
-    }
-
+  Widget _buildProfileView() {
     return RefreshIndicator(
       onRefresh: () async {
         await _fetchProfile();
         await _fetchPosts();
-        if (!_isOwnProfile) {
+        if (!_isOwnProfile && _isLoggedIn!) {
           await _checkFollowingStatus();
         }
       },
@@ -485,8 +400,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
                 ],
               ),
               const SizedBox(height: 24),
-              // Add Post Button - only show on own profile
-              if (_isOwnProfile) ...[
+              // Add Post Button - only show on own profile when logged in
+              if (_isOwnProfile && _isLoggedIn!) ...[
                 Center(
                   child: _buildAddPostButton(),
                 ),
@@ -898,16 +813,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
   }
 
   Future<void> _fetchPosts() async {
-    if (_isLoggedIn == true) {
-      final posts = widget.userId != null
-        ? await _authService.getUserPosts(userId: widget.userId)
-        : await _authService.getUserPosts();
-        
-      if (mounted) {
-        setState(() {
-          _posts = posts;
-        });
-      }
+    final posts = await _authService.getUserPosts(userId: widget.userId);
+      
+    if (mounted) {
+      setState(() {
+        _posts = posts;
+      });
     }
   }
 
