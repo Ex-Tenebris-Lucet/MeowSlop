@@ -177,27 +177,52 @@ serve(async (req) => {
         }
       }
 
-      // Get all untagged videos (not images)
-      const { data: untaggedMedia } = await supabase
+      console.log('Starting batch process...');
+      
+      // First, let's see ALL videos
+      const { data: allVideos, error: videoError } = await supabase
         .from('media_items')
         .select('id')
-        .eq('media_type', 'video')  // Only get videos
+        .eq('media_type', 'video');
+        
+      console.log('Total videos found:', allVideos?.length);
+
+      // Then get all tagged media
+      const { data: taggedMedia, error: tagError } = await supabase
+        .from('media_item_tags')
+        .select('media_item_id');
+        
+      console.log('Videos with tags:', taggedMedia?.length);
+
+      // Get all untagged videos
+      const { data: untaggedMedia, error: untaggedError } = await supabase
+        .from('media_items')
+        .select('id')
+        .eq('media_type', 'video')
         .not('id', 'in', (
           supabase.from('media_item_tags')
             .select('media_item_id')
         ))
-        .limit(10);  // Process in smaller batches to avoid timeouts
+        .limit(10);
+
+      if (videoError) console.error('Error getting videos:', videoError);
+      if (tagError) console.error('Error getting tagged media:', tagError);
+      if (untaggedError) console.error('Error getting untagged media:', untaggedError);
+        
+      console.log('Untagged videos found:', untaggedMedia?.length);
+      console.log('Untagged video IDs:', untaggedMedia);
 
       const results = [];
       for (const item of untaggedMedia || []) {
         try {
+          console.log('Processing video:', item.id);
           results.push(await tagSingleMedia(item.id));
           // Small delay to avoid rate limits
           await new Promise(r => setTimeout(r, 1000));
         } catch (error) {
           console.error(`Failed to process media ${item.id}:`, error);
           results.push({ error: error.message, mediaId: item.id });
-          continue;  // Continue with next item even if one fails
+          continue;
         }
       }
 
