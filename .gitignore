@@ -23,6 +23,7 @@ package-lock.json
 AmazonRekognitionLabels_v3.0/
 edgeFunc4Rekog.ts
 .vscode/
+trigger-batch.ps1
 
 # IntelliJ related
 *.iml
