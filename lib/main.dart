@@ -76,7 +76,7 @@ class MeowSlopApp extends StatelessWidget {
                     size: 48,
                   ),
                   const SizedBox(height: 16),
-                  Text(
+                  const Text(
                     'Something went wrong',
                     style: TextStyle(
                       color: MeowColors.creamWhite,

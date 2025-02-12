@@ -149,6 +149,19 @@ class _FeedScreenState extends State<FeedScreen> {
           debugPrint('Error setting up image preload: $e');
         }
       }
+
+      // Preload profile picture for currently visible posts
+      final creator = post['profiles'] as Map<String, dynamic>? ?? {};
+      final profilePicUrl = creator['profile_pic_url'];
+      if (profilePicUrl != null && profilePicUrl.isNotEmpty && !_preloadedImages.containsKey(profilePicUrl)) {
+        try {
+          final imageProvider = NetworkImage(profilePicUrl);
+          _preloadedImages[profilePicUrl] = imageProvider;
+          precacheImage(imageProvider, context);
+        } catch (e) {
+          debugPrint('Error setting up profile image preload: $e');
+        }
+      }
     }
   }
 
@@ -462,7 +475,7 @@ class _FeedScreenState extends State<FeedScreen> {
                                 Colors.transparent,
                                 Colors.black.withOpacity(0.7),
                               ],
-                              stops: [0.7, 1.0],
+                              stops: const [0.7, 1.0],
                             ),
                           ),
                           child: Stack(

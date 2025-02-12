@@ -106,7 +106,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
               child: Opacity(
                 opacity: _startAnimation ? _opacityAnimation.value : 1.0,
                 child: const Text(
-                  'Meoẅslop',
+                  'MeoẅSlop',
                   style: TextStyle(
                     fontSize: 48,
                     fontWeight: FontWeight.bold,

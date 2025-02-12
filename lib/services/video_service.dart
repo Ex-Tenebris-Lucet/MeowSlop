@@ -315,7 +315,7 @@ class VideoPreloadManager {
 
   Future<void> _cleanupStaleCache() async {
     final now = DateTime.now();
-    final staleThreshold = const Duration(hours: 1);
+    const staleThreshold = Duration(hours: 1);
     
     final staleUrls = _lastAccessTimes.entries
         .where((entry) => now.difference(entry.value) > staleThreshold)

@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'signup_screen.dart';
-import 'login_screen.dart';
 import '../services/auth_service.dart';
 import '../widgets/video_player_widget.dart';
 import '../services/video_service.dart';
@@ -116,15 +114,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
   }
 
   Future<void> _checkFollowingStatus() async {
-    if (widget.userId != null) {
-      final isFollowing = await _authService.isFollowing(widget.userId);
-      if (mounted) {
-        setState(() {
-          _isFollowing = isFollowing;
-        });
-      }
+    final isFollowing = await _authService.isFollowing(widget.userId);
+    if (mounted) {
+      setState(() {
+        _isFollowing = isFollowing;
+      });
     }
-  }
+    }
 
   Future<void> _fetchFollowCounts() async {
     if (_profile != null) {
@@ -430,18 +426,18 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
 
     if (_posts!.isEmpty) {
       // No posts state
-      return SizedBox(
+      return const SizedBox(
         height: 200,  // Give empty state some height
         child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
+              Icon(
                 Icons.photo_library_outlined,
                 color: Colors.white38,
                 size: 48,
               ),
-              const SizedBox(height: 16),
+              SizedBox(height: 16),
               Text(
                 'No posts yet',
                 style: TextStyle(
@@ -708,99 +704,47 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
     final ImagePicker picker = ImagePicker();
     
     try {
-      // Show media type picker
-      final mediaType = await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          backgroundColor: Colors.grey[900],
-          title: const Text(
-            'Add Post',
-            style: TextStyle(color: Colors.white),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.image, color: Colors.white),
-                title: const Text(
-                  'Photo',
-                  style: TextStyle(color: Colors.white),
-                ),
-                onTap: () => Navigator.pop(context, 'image'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.video_library, color: Colors.white),
-                title: const Text(
-                  'Video',
-                  style: TextStyle(color: Colors.white),
-                ),
-                onTap: () => Navigator.pop(context, 'video'),
-              ),
-            ],
-          ),
-        ),
+      final XFile? video = await picker.pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(minutes: 2),
       );
 
-      if (mediaType == null) return;
+      if (video == null) return;
       if (!mounted) return;
 
-      if (mediaType == 'image') {
-        final XFile? image = await picker.pickImage(
-          source: ImageSource.gallery,
-          maxWidth: 1920,
-          maxHeight: 1920,
-          imageQuality: 85,
-        );
+      setState(() {
+        _isUploading = true;
+        _uploadProgress = 0;
+      });
 
-        if (image == null) return;
-        if (!mounted) return;
+      try {
+        final videoUrl = await _authService.uploadVideo(video.path);
 
-        final imageBytes = await image.readAsBytes();
-        await _authService.uploadPost(imageBytes);
         await _fetchPosts();
-      } else {
-        final XFile? video = await picker.pickVideo(
-          source: ImageSource.gallery,
-          maxDuration: const Duration(minutes: 5),
-        );
 
-        if (video == null) return;
-        if (!mounted) return;
-
-        setState(() {
-          _isUploading = true;
-          _uploadProgress = 0.0;
-        });
-
-        try {
-          final videoUrl = await _authService.uploadVideo(video.path);
-
-          await _fetchPosts();
-
-          if (mounted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Post uploaded successfully')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          if (e.toString().contains('cancelled')) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Post uploaded successfully')),
+              const SnackBar(content: Text('Upload cancelled')),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Upload failed: ${e.toString()}')),
             );
           }
-        } catch (e) {
-          if (mounted) {
-            if (e.toString().contains('cancelled')) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Upload cancelled')),
-              );
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Upload failed: ${e.toString()}')),
-              );
-            }
-          }
-        } finally {
-          if (mounted) {
-            setState(() {
-              _isUploading = false;
-              _uploadProgress = 0.0;
-            });
-          }
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isUploading = false;
+            _uploadProgress = 0.0;
+          });
         }
       }
     } catch (e) {

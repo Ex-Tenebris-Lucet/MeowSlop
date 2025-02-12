@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
@@ -28,7 +27,7 @@ class S3Service {
 
   bool _isInitialized = false;
   bool _isCancelled = false;
-  double _uploadProgress = 0.0;
+  final double _uploadProgress = 0.0;
 
   double get uploadProgress => _uploadProgress;
 
@@ -145,7 +144,7 @@ class S3Service {
     debugPrint('Signed headers string: $signedHeadersString');
 
     final canonicalUri = Uri.encodeFull('/$key');
-    final canonicalQueryString = '';
+    const canonicalQueryString = '';
 
     final canonicalRequest = [
       method,
@@ -239,7 +238,7 @@ class S3Service {
       // Prepare headers
       final headers = <String, String>{
         'Content-Length': bytes.length.toString(),
-        if (contentType != null) 'Content-Type': contentType,
+        'Content-Type': contentType,
       };
 
       // Sign the request

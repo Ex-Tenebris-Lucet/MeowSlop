@@ -1,5 +1,4 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'dart:typed_data';
 import 'video_service.dart';
 import 's3_service.dart';
 import 'package:flutter/foundation.dart';
