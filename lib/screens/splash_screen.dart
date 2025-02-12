@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/device_service.dart';
 import '../services/supabase_service.dart';
+import '../services/video_service.dart';
 import 'feed_screen.dart';
 // import '../services/giphy_service.dart';  // Commented out Giphy service
 
@@ -18,16 +19,13 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   late Animation<double> _positionAnimation;
   late Animation<double> _opacityAnimation;
   bool _startAnimation = false;
+  final _feedPreloader = FeedPreloader();
 
   @override
   void initState() {
     super.initState();
-    
-    // Setup the animations
     _setupAnimations();
-    
-    // Test connection and start animation when ready
-    _testConnectionAndAnimate();
+    _startLoadingAndAnimate();
   }
 
   void _setupAnimations() {
@@ -53,36 +51,48 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     ));
   }
 
-  Future<void> _testConnectionAndAnimate() async {
+  Future<void> _startLoadingAndAnimate() async {
+    // Start preloading immediately
+    _feedPreloader.startPreloading();
+    
     try {
+      // Run connection test in parallel with preloading
       final success = await SupabaseService().testConnection();
       print('Supabase connection test: ${success ? 'PASSED' : 'FAILED'}');
-      
-      if (!success) {
-        // In production, you might want to show an error message
-        // or retry the connection
-        print('Warning: Proceeding despite failed connection test');
-      }
     } catch (e) {
       print('Error testing connection: $e');
     }
 
-    // Proceed with animation after connection test
-    if (mounted) {
-      Future.delayed(const Duration(milliseconds: 1000), () {
+    try {
+      // Wait for first post to be ready
+      final firstPost = await _feedPreloader.getFirstPost();
+      
+      if (mounted) {
+        setState(() => _startAnimation = true);
+        await _controller.forward();
+        
         if (mounted) {
-          setState(() => _startAnimation = true);
-          _controller.forward().then((_) {
-            if (mounted) {
-              Navigator.of(context).pushReplacement(
-                MaterialPageRoute(
-                  builder: (context) => const FeedScreen(),
-                ),
-              );
-            }
-          });
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => FeedScreen(preloadedPosts: firstPost),
+            ),
+          );
         }
-      });
+      }
+    } catch (e) {
+      print('Error loading initial post: $e');
+      if (mounted) {
+        // Still transition to feed screen, it will handle the error state
+        setState(() => _startAnimation = true);
+        await _controller.forward();
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => const FeedScreen(),
+            ),
+          );
+        }
+      }
     }
   }
 

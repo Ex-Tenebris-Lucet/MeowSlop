@@ -7,6 +7,8 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 's3_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'auth_service.dart';
+import 'package:video_player/video_player.dart';
 
 class VideoService {
   static final VideoService _instance = VideoService._internal();
@@ -159,24 +161,17 @@ class VideoPreloadManager {
   factory VideoPreloadManager() => _instance;
   VideoPreloadManager._internal();
 
-  final Map<String, String> _cachedVideoPaths = {};
-  final Map<String, DateTime> _lastAccessTimes = {};
-  final Map<String, int> _fileSizes = {};
-  static const int _maxCacheSizeBytes = 50 * 1024 * 1024; // 50 MB
-  int _currentCacheSize = 0;
-  Timer? _cleanupTimer;
-  bool _preloadingEnabled = false;
-  bool _isDisposed = false;
+  final Map<String, VideoPlayerController> _preloadedControllers = {};
+  static const int _preloadAheadCount = 2;
+  static const int _maxCachedVideos = 4;  // Keep max 4 videos in memory
 
-  void setPaused(bool paused) {
-    _preloadingEnabled = !paused;
-  }
+  bool isPreloadedController(String url) => _preloadedControllers.containsKey(url);
 
   void updateCurrentIndex(int index, List<Map<String, dynamic>> posts) {
-    if (!_preloadingEnabled || _isDisposed) return;
+    _cleanOldCache(index, posts);
     
-    // Preload videos for the next few posts
-    for (var i = index; i < posts.length && i < index + 5; i++) {
+    // Only preload next few videos
+    for (var i = index + 1; i < posts.length && i <= index + _preloadAheadCount; i++) {
       final post = posts[i];
       if (post['media_type'] == 'video' && post['storage_path'] != null) {
         preloadVideo(post['storage_path']);
@@ -184,157 +179,81 @@ class VideoPreloadManager {
     }
   }
 
-  void dispose() {
-    _isDisposed = true;
-    _preloadingEnabled = false;
-    _cleanupTimer?.cancel();
-    _cleanupAllCache();
-  }
-
-  Future<int> _getFileSize(String filePath) async {
-    try {
-      final file = File(filePath);
-      if (await file.exists()) {
-        return await file.length();
-      }
-    } catch (e) {
-      debugPrint('Error getting file size: $e');
-    }
-    return 0;
-  }
-
-  Future<void> _cleanupAllCache() async {
-    for (var filePath in _cachedVideoPaths.values) {
-      try {
-        final file = File(filePath);
-        if (await file.exists()) {
-          await file.delete();
-        }
-      } catch (e) {
-        debugPrint('Error cleaning up cached file: $e');
-      }
-    }
-    _cachedVideoPaths.clear();
-    _lastAccessTimes.clear();
-    _fileSizes.clear();
-    _currentCacheSize = 0;
-  }
-
-  Future<String?> getCachedVideoPath(String url) async {
-    if (!_cachedVideoPaths.containsKey(url)) return null;
+  void _cleanOldCache(int currentIndex, List<Map<String, dynamic>> posts) {
+    // Get list of URLs that we want to keep
+    final urlsToKeep = <String>{};
     
-    _lastAccessTimes[url] = DateTime.now();
-    final path = _cachedVideoPaths[url];
-    
-    // Verify file still exists
-    if (path != null) {
-      final file = File(path);
-      if (await file.exists()) {
-        return path;
-      } else {
-        // File was deleted externally, remove from cache
-        _removeFromCache(url);
+    // Keep current and next few videos
+    for (var i = currentIndex; i < posts.length && i <= currentIndex + _preloadAheadCount; i++) {
+      final post = posts[i];
+      if (post['media_type'] == 'video' && post['storage_path'] != null) {
+        urlsToKeep.add(post['storage_path']);
       }
     }
-    return null;
-  }
 
-  void _removeFromCache(String url) {
-    final size = _fileSizes.remove(url) ?? 0;
-    _currentCacheSize -= size;
-    _cachedVideoPaths.remove(url);
-    _lastAccessTimes.remove(url);
+    // Clean up old controllers
+    _preloadedControllers.removeWhere((url, controller) {
+      if (!urlsToKeep.contains(url)) {
+        controller.dispose();
+        return true;
+      }
+      return false;
+    });
   }
 
   Future<void> preloadVideo(String url) async {
-    if (!_preloadingEnabled || _isDisposed) return;
-    
-    if (_cachedVideoPaths.containsKey(url)) {
-      _lastAccessTimes[url] = DateTime.now();
-      return;
+    // If already preloaded, do nothing
+    if (_preloadedControllers.containsKey(url)) return;
+
+    // If we have too many cached videos, remove oldest ones
+    while (_preloadedControllers.length >= _maxCachedVideos) {
+      final oldestUrl = _preloadedControllers.keys.first;
+      final controller = _preloadedControllers.remove(oldestUrl);
+      await controller?.dispose();
     }
 
     try {
-      final tempDir = await getTemporaryDirectory();
-      final fileName = url.split('/').last;
-      final filePath = '${tempDir.path}/$fileName';
+      final controller = VideoPlayerController.networkUrl(
+        Uri.parse(url),
+        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+      );
 
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode == 200) {
-        final fileSize = response.bodyBytes.length;
-        
-        // Clean up cache if needed before adding new file
-        while (_currentCacheSize + fileSize > _maxCacheSizeBytes && _cachedVideoPaths.isNotEmpty) {
-          await _removeOldestCache();
-        }
-
-        // Only proceed if we can fit the new file
-        if (fileSize <= _maxCacheSizeBytes) {
-          await File(filePath).writeAsBytes(response.bodyBytes);
-          _cachedVideoPaths[url] = filePath;
-          _lastAccessTimes[url] = DateTime.now();
-          _fileSizes[url] = fileSize;
-          _currentCacheSize += fileSize;
-        }
-      }
-
-      _startCleanupTimer();
+      await controller.initialize();
+      _preloadedControllers[url] = controller;
     } catch (e) {
       debugPrint('Error preloading video: $e');
     }
   }
 
-  Future<void> _removeOldestCache() async {
-    if (_cachedVideoPaths.isEmpty) return;
+  VideoPlayerController? getPreloadedController(String url) {
+    return _preloadedControllers[url];
+  }
 
-    final oldestUrl = _lastAccessTimes.entries
-        .reduce((a, b) => a.value.isBefore(b.value) ? a : b)
-        .key;
-
-    final filePath = _cachedVideoPaths[oldestUrl];
-    if (filePath != null) {
-      try {
-        final file = File(filePath);
-        if (await file.exists()) {
-          await file.delete();
-        }
-      } catch (e) {
-        debugPrint('Error removing cached file: $e');
-      }
+  void dispose() {
+    for (var controller in _preloadedControllers.values) {
+      controller.dispose();
     }
+    _preloadedControllers.clear();
+  }
+}
 
-    _removeFromCache(oldestUrl);
+class FeedPreloader {
+  static final FeedPreloader _instance = FeedPreloader._internal();
+  factory FeedPreloader() => _instance;
+  FeedPreloader._internal();
+
+  final _authService = AuthService();
+  Future<List<Map<String, dynamic>>>? _firstPostFuture;
+  Future<List<Map<String, dynamic>>>? _remainingPostsFuture;
+
+  void startPreloading() {
+    _firstPostFuture = _authService.getRandomPosts(limit: 1);
+    _remainingPostsFuture = _authService.getRandomPosts(limit: 9);
   }
 
-  void _startCleanupTimer() {
-    _cleanupTimer?.cancel();
-    _cleanupTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
-      await _cleanupStaleCache();
-    });
-  }
-
-  Future<void> _cleanupStaleCache() async {
-    final now = DateTime.now();
-    const staleThreshold = Duration(hours: 1);
+  Future<List<Map<String, dynamic>>> getFirstPost() => 
+    _firstPostFuture ?? _authService.getRandomPosts(limit: 1);
     
-    final staleUrls = _lastAccessTimes.entries
-        .where((entry) => now.difference(entry.value) > staleThreshold)
-        .map((entry) => entry.key)
-        .toList();
-
-    for (final url in staleUrls) {
-      final filePath = _cachedVideoPaths[url];
-      if (filePath != null) {
-        try {
-          final file = File(filePath);
-          if (await file.exists()) {
-            await file.delete();
-          }
-        } catch (e) {
-          debugPrint('Error cleaning up stale cache: $e');
-        }
-      }
-      _removeFromCache(url);
-    }
-  }
+  Future<List<Map<String, dynamic>>> getRemainingPosts() => 
+    _remainingPostsFuture ?? _authService.getRandomPosts(limit: 9);
 } 
