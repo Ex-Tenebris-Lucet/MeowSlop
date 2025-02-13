@@ -181,21 +181,35 @@ async function analyzeFrames(framePaths: string[]): Promise<string[]> {
 
 async function processVideo(mediaId: string) {
   try {
+    console.log(`\nStarting to process video ${mediaId}`);
     const { data: mediaItem, error: mediaError } = await supabase
       .from('media_items')
       .select(`*, media_item_tags(tag_id, tags(name))`)
       .eq('id', mediaId)
       .single();
     
-    if (mediaError || !mediaItem) throw new Error('Media not found');
+    if (mediaError || !mediaItem) {
+      console.log('Media not found:', mediaError);
+      throw new Error('Media not found');
+    }
 
     if (mediaItem.media_item_tags?.length > 0) {
-      return { skipped: true };
+      console.log(`Skipping video ${mediaId} - already has ${mediaItem.media_item_tags.length} tags`);
+      return { skipped: true, reason: 'already_tagged' };
     }
+
+    console.log('Media item found:', {
+      id: mediaItem.id,
+      path: mediaItem.storage_path,
+      type: mediaItem.media_type
+    });
 
     const url = new URL(mediaItem.storage_path);
     const bucket = url.hostname.split('.')[0];
     const videoKey = decodeURIComponent(url.pathname.substring(1));
+
+    console.log('Downloading from bucket:', bucket);
+    console.log('Video key:', videoKey);
 
     const videoPath = await downloadFromS3(bucket, videoKey);
     const framePaths = await extractFrames(videoPath);
@@ -249,18 +263,20 @@ async function processVideo(mediaId: string) {
 
 async function processBatch(limit: number = 1) {
   try {
-    // Get videos that have no tags using a left join
+    console.log('\nQuerying for untagged videos...');
+    // First get all video IDs that have tags
+    const { data: taggedIds } = await supabase
+      .from('media_item_tags')
+      .select('media_item_id');
+
+    const taggedIdSet = new Set(taggedIds?.map(t => t.media_item_id) || []);
+    
+    // Then get videos that aren't in that set
     const { data: untaggedMedia, error } = await supabase
       .from('media_items')
-      .select(`
-        id,
-        storage_path,
-        media_item_tags!left (
-          media_item_id
-        )
-      `)
+      .select('id, storage_path')
       .eq('media_type', 'video')
-      .is('media_item_tags.media_item_id', null)
+      .filter('id', 'not.in', `(${Array.from(taggedIdSet).join(',')})`)
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -269,7 +285,13 @@ async function processBatch(limit: number = 1) {
       throw error;
     }
     
-    console.log('Found untagged videos:', untaggedMedia);
+    console.log('\nFound untagged videos:', untaggedMedia?.length || 0);
+    if (untaggedMedia && untaggedMedia.length > 0) {
+      console.log('First untagged video:', {
+        id: untaggedMedia[0].id,
+        path: untaggedMedia[0].storage_path
+      });
+    }
 
     const results = [];
     for (const item of untaggedMedia || []) {

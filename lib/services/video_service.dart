@@ -163,20 +163,32 @@ class VideoPreloadManager {
 
   final Map<String, VideoPlayerController> _preloadedControllers = {};
   static const int _preloadAheadCount = 2;
-  static const int _maxCachedVideos = 4;  // Keep max 4 videos in memory
+  static const int _maxCachedVideos = 7;
+
+  // Track current preload state
+  String? _currentlyPreloading;
+  final _preloadQueue = <String>[];
 
   bool isPreloadedController(String url) => _preloadedControllers.containsKey(url);
 
   void updateCurrentIndex(int index, List<Map<String, dynamic>> posts) {
     _cleanOldCache(index, posts);
     
-    // Only preload next few videos
+    // Clear existing queue and build new one in priority order
+    _preloadQueue.clear();
     for (var i = index + 1; i < posts.length && i <= index + _preloadAheadCount; i++) {
       final post = posts[i];
       if (post['media_type'] == 'video' && post['storage_path'] != null) {
-        preloadVideo(post['storage_path']);
+        final url = post['storage_path'];
+        // Only queue if not already loaded or currently loading
+        if (!_preloadedControllers.containsKey(url) && url != _currentlyPreloading) {
+          _preloadQueue.add(url);
+        }
       }
     }
+    
+    // Start processing queue if not already doing so
+    _processPreloadQueue();
   }
 
   void _cleanOldCache(int currentIndex, List<Map<String, dynamic>> posts) {
@@ -201,11 +213,32 @@ class VideoPreloadManager {
     });
   }
 
+  Future<void> _processPreloadQueue() async {
+    // If already loading or queue empty, do nothing
+    if (_currentlyPreloading != null || _preloadQueue.isEmpty) return;
+    
+    try {
+      // Take next URL to preload
+      _currentlyPreloading = _preloadQueue.removeAt(0);
+      debugPrint('Starting preload of video: ${_currentlyPreloading}');
+      
+      await preloadVideo(_currentlyPreloading!);
+      
+      // Clear current and process next
+      _currentlyPreloading = null;
+      _processPreloadQueue();
+    } catch (e) {
+      debugPrint('Error in preload queue processing: $e');
+      _currentlyPreloading = null;
+      _processPreloadQueue();  // Continue with next even if one fails
+    }
+  }
+
   Future<void> preloadVideo(String url) async {
-    // If already preloaded, do nothing
+    // Skip if already preloaded
     if (_preloadedControllers.containsKey(url)) return;
 
-    // If we have too many cached videos, remove oldest ones
+    // Clean old videos if we're at limit
     while (_preloadedControllers.length >= _maxCachedVideos) {
       final oldestUrl = _preloadedControllers.keys.first;
       final controller = _preloadedControllers.remove(oldestUrl);
@@ -220,8 +253,10 @@ class VideoPreloadManager {
 
       await controller.initialize();
       _preloadedControllers[url] = controller;
+      debugPrint('Successfully preloaded video: $url');
     } catch (e) {
       debugPrint('Error preloading video: $e');
+      rethrow;  // Rethrow so _processPreloadQueue can handle it
     }
   }
 
@@ -230,6 +265,8 @@ class VideoPreloadManager {
   }
 
   void dispose() {
+    _preloadQueue.clear();
+    _currentlyPreloading = null;
     for (var controller in _preloadedControllers.values) {
       controller.dispose();
     }

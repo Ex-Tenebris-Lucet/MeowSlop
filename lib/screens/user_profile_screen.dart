@@ -4,6 +4,7 @@ import '../services/auth_service.dart';
 import '../widgets/video_player_widget.dart';
 import '../services/video_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'feed_screen.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;  // The ID of the user whose profile to show
@@ -195,10 +196,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
     if (confirmed == true) {
       await _authService.logout();
       if (mounted) {
-        setState(() {
-          _isLoggedIn = false;
-          _profile = null;
-        });
+        // Navigate to feed screen and clear the stack
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => const FeedScreen(),
+          ),
+          (route) => false,  // Remove all previous routes
+        );
       }
     }
   }
