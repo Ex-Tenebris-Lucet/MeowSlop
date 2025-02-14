@@ -85,6 +85,23 @@ $$ language plpgsql;
 create trigger update_follower_counts_trigger
 after insert or delete on followers
 for each row execute function update_follower_counts();
+
+-- Tag affinity tracking for recommendations
+DROP TABLE IF EXISTS tag_affinities;  -- Remove the old table first
+CREATE TABLE tag_affinities (
+    user_id UUID REFERENCES profiles(id),
+    tag_id UUID REFERENCES tags(id),
+    affinity_score SMALLINT DEFAULT 0,
+    PRIMARY KEY (user_id, tag_id)
+);
+
+-- Indexes for performance
+CREATE INDEX idx_tag_affinities_user ON tag_affinities(user_id);
+CREATE INDEX idx_tag_affinities_score ON tag_affinities(affinity_score DESC);
+
+-- DIS-Enable RLS
+alter table tag_affinities disable row level security;
+
 ```
 
 ## Storage Buckets

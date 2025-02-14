@@ -5,6 +5,7 @@ import '../widgets/video_player_widget.dart';
 import '../services/video_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'feed_screen.dart';
+import 'tag_preferences_screen.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final String userId;  // The ID of the user whose profile to show
@@ -336,6 +337,42 @@ class _UserProfileScreenState extends State<UserProfileScreen> with WidgetsBindi
                       ],
                     ),
                   ),
+                  if (_isOwnProfile) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(right: 32.0),
+                      child: IconButton(
+                        icon: const Text(
+                          '#',
+                          style: TextStyle(
+                            fontFamily: 'CherryBombOne',
+                            fontSize: 36,
+                            color: Colors.white,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            PageRouteBuilder(
+                              pageBuilder: (context, animation, secondaryAnimation) => 
+                                const TagPreferencesScreen(),
+                              transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                                const begin = Offset(1.0, 0.0);
+                                const end = Offset.zero;
+                                const curve = Curves.easeOutExpo;
+                                var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+                                var offsetAnimation = animation.drive(tween);
+                                return SlideTransition(
+                                  position: offsetAnimation,
+                                  child: child,
+                                );
+                              },
+                              transitionDuration: const Duration(milliseconds: 100),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                   if (!_isOwnProfile && _isLoggedIn!)
                     TextButton(
                       onPressed: _toggleFollow,

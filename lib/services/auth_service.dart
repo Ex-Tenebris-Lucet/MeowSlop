@@ -215,59 +215,106 @@ class AuthService {
     if (user == null) throw Exception('Not logged in');
 
     try {
-      // Get post details to check if it's a video
+      // Get post details and verify ownership
       final post = await _supabase
         .from('media_items')
-        .select()
+        .select('*, owner_id')
         .eq('id', postId)
         .single();
 
-      // Delete the post record first
-      await _supabase
+      if (post == null) {
+        throw Exception('Post not found');
+      }
+
+      // Verify ownership
+      if (post['owner_id'] != user.id) {
+        throw Exception('Not authorized to delete this post');
+      }
+
+      // Store file URLs before deletion
+      final storageUrls = <String>[];
+      storageUrls.add(mediaUrl);
+      if (post['media_type'] == 'video' && post['thumbnail_url'] != null) {
+        storageUrls.add(post['thumbnail_url']);
+      }
+
+      // Try to delete files first - if this fails, we haven't touched the DB
+      try {
+        if (post['media_type'] == 'video' && post['thumbnail_url'] != null) {
+          await _videoService.deleteVideo(mediaUrl, post['thumbnail_url']);
+        } else {
+          await _s3Service.deleteFile(mediaUrl);
+        }
+      } catch (e) {
+        debugPrint('Warning: Failed to delete files: $e');
+        // Continue with DB deletion even if file deletion fails
+        // This prevents posts from being "stuck" if S3 is having issues
+      }
+
+      // Now delete from database
+      final response = await _supabase
         .from('media_items')
         .delete()
-        .match({'id': postId});
+        .match({
+          'id': postId,
+          'owner_id': user.id  // Extra safety check
+        });
 
-      // Then delete the files from S3
-      if (post['media_type'] == 'video' && post['thumbnail_url'] != null) {
-        // If it's a video, use VideoService to delete both video and thumbnail
-        await _videoService.deleteVideo(mediaUrl, post['thumbnail_url']);
-      } else {
-        // For images, just delete the media file
-        await _s3Service.deleteFile(mediaUrl);
+      if (response.error != null) {
+        throw response.error!.message;
       }
+
     } catch (e) {
-      debugPrint('Error deleting post: $e');
+      debugPrint('Error in deletePost: $e');
       rethrow;
     }
   }
 
-  Future<List<Map<String, dynamic>>> getRandomPosts({int limit = 10}) async {
+  Future<List<Map<String, dynamic>>> getRandomPosts({int limit = 10, bool useTagPreferences = false}) async {
     try {
-      // Get ALL posts with their profile info
-      final response = await _supabase
-        .from('media_items')
-        .select('''
-          *,
-          profiles:owner_id (
-            id,
-            username,
-            profile_pic_url
-          )
-        ''')
-        .order('created_at', ascending: false);  // Keep chronological order as fallback
-      
-      if (response == null) return [];
-      
-      // Shuffle all posts
-      final allPosts = List<Map<String, dynamic>>.from(response);
-      allPosts.shuffle();
-      
-      // Return only the requested number
-      return allPosts.take(limit).toList();
+      if (!useTagPreferences) {
+        // Original random feed logic
+        final response = await _supabase
+          .from('media_items')
+          .select('*, profiles(*)')
+          .order('created_at', ascending: false)
+          .limit(limit);
+
+        final posts = response is List ? response : 
+                     response?.data is List ? response.data : [];
+        return List<Map<String, dynamic>>.from(posts);
+      }
+
+      // Get current user's tag preferences
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId == null) {
+        // Fall back to random if not logged in
+        return getRandomPosts(limit: limit, useTagPreferences: false);
+      }
+
+      // Get posts with tag affinity scores
+      // Add some randomness while still respecting preferences
+      final response = await _supabase.rpc(
+        'get_personalized_feed',
+        params: {
+          'current_user_id': userId,
+          'posts_limit': limit
+        }
+      );
+
+      final posts = response is List ? response : 
+                   response?.data is List ? response.data : [];
+
+      if (posts.isEmpty) {
+        // Fall back to random if no matches
+        return getRandomPosts(limit: limit, useTagPreferences: false);
+      }
+
+      return List<Map<String, dynamic>>.from(posts);
     } catch (e) {
-      debugPrint('Error getting random posts: $e');
-      return [];
+      print('Error getting posts: $e');
+      // Fall back to random on error
+      return getRandomPosts(limit: limit, useTagPreferences: false);
     }
   }
 
@@ -354,5 +401,73 @@ class AuthService {
       .order('created_at', ascending: false);
 
     return List<Map<String, dynamic>>.from(response);
+  }
+
+  Future<List<Map<String, dynamic>>> getFullFeedList({bool useTagPreferences = false}) async {
+    try {
+      // Get all posts with their tags and profiles in a single query
+      final response = await _supabase
+        .from('media_items')
+        .select('''
+          *,
+          profiles(*),
+          media_item_tags(
+            tags(name)
+          )
+        ''')
+        .order('created_at', ascending: false);
+
+      if (response == null) return [];
+      
+      var posts = List<Map<String, dynamic>>.from(response);
+      
+      if (useTagPreferences) {
+        // Get user's tag preferences
+        final userId = _supabase.auth.currentUser?.id;
+        if (userId != null) {
+          final tagPrefs = await _supabase
+            .from('tag_affinities')
+            .select('tag_id, affinity_score')
+            .eq('user_id', userId);
+
+          if (tagPrefs != null) {
+            // Create a map of tag scores for quick lookup
+            final tagScores = Map.fromEntries(
+              (tagPrefs as List).map((t) => MapEntry(t['tag_id'], t['affinity_score'] as int))
+            );
+
+            // Sort posts based on matching tags and their scores
+            posts.sort((a, b) {
+              int scoreA = 0, scoreB = 0;
+              
+              // Sum up scores for each post's tags
+              for (var tagItem in (a['media_item_tags'] as List)) {
+                final tagId = tagItem['tag_id'];
+                if (tagScores.containsKey(tagId)) {
+                  scoreA += tagScores[tagId]!;
+                }
+              }
+              
+              for (var tagItem in (b['media_item_tags'] as List)) {
+                final tagId = tagItem['tag_id'];
+                if (tagScores.containsKey(tagId)) {
+                  scoreB += tagScores[tagId]!;
+                }
+              }
+              
+              return scoreB.compareTo(scoreA);  // Higher scores first
+            });
+          }
+        }
+      } else {
+        // For random feed, just shuffle the posts
+        posts.shuffle();
+      }
+
+      return posts;
+    } catch (e) {
+      print('Error getting feed list: $e');
+      return [];
+    }
   }
 } 

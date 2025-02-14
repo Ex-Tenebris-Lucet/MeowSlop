@@ -5,7 +5,6 @@ import '../services/video_service.dart';
 import 'user_profile_screen.dart';
 import 'login_screen.dart';
 import '../widgets/video_player_widget.dart';
-import 'dart:io';
 import 'package:visibility_detector/visibility_detector.dart';
 
 // Add custom scroll behavior
@@ -36,7 +35,8 @@ class _FeedScreenState extends State<FeedScreen> {
   final _authService = AuthService();
   final _videoPreloadManager = VideoPreloadManager();
   List<Map<String, dynamic>> _posts = [];
-  Future<void>? _loadingFuture;
+  bool _isLoading = true;
+  bool _useTagPreferences = false;
   final _pageController = PageController();
   bool _showOverlay = false;
 
@@ -44,31 +44,57 @@ class _FeedScreenState extends State<FeedScreen> {
   void initState() {
     super.initState();
     _updateSystemUI();
-    
-    if (widget.preloadedPosts != null && widget.preloadedPosts!.isNotEmpty) {
-      _posts = widget.preloadedPosts!;
-      _videoPreloadManager.updateCurrentIndex(0, _posts);
-      _loadingFuture = _loadMorePosts();
-    } else {
-      _loadingFuture = _loadInitialPosts();
+    _initializeFeed();
+  }
+
+  Future<void> _initializeFeed() async {
+    try {
+      setState(() => _isLoading = true);
+      
+      final posts = await _authService.getFullFeedList(
+        useTagPreferences: _useTagPreferences
+      );
+      
+      if (!mounted) return;
+      setState(() {
+        _posts = posts;
+        _isLoading = false;
+      });
+
+      if (_posts.isNotEmpty) {
+        _videoPreloadManager.updateCurrentIndex(0, _posts);
+      }
+    } catch (e) {
+      print('Error initializing feed: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading feed: ${e.toString()}')),
+        );
+      }
     }
   }
 
-  Future<void> _loadInitialPosts() async {
-    final posts = await _authService.getRandomPosts(limit: 10);
-    if (!mounted) return;
-    setState(() => _posts = posts);
-    _videoPreloadManager.updateCurrentIndex(0, _posts);
-  }
-
-  Future<void> _loadMorePosts() async {
-    if (_loadingFuture != null) return;
-
-    _loadingFuture = _authService.getRandomPosts(limit: 5).then((newPosts) {
+  Future<void> _refreshFeed() async {
+    try {
+      final posts = await _authService.getFullFeedList(
+        useTagPreferences: _useTagPreferences
+      );
+      
       if (!mounted) return;
-      setState(() => _posts.addAll(newPosts));
-      _loadingFuture = null;
-    });
+      setState(() => _posts = posts);
+
+      if (_posts.isNotEmpty) {
+        _videoPreloadManager.updateCurrentIndex(0, _posts);
+      }
+    } catch (e) {
+      print('Error refreshing feed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error refreshing feed: ${e.toString()}')),
+        );
+      }
+    }
   }
 
   void _updateSystemUI() {
@@ -130,27 +156,22 @@ class _FeedScreenState extends State<FeedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<void>(
-      future: _loadingFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && _posts.isEmpty) {
-          return const Scaffold(
-            backgroundColor: Colors.black,
-            body: Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            ),
-          );
-        }
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+          ),
+        ),
+      );
+    }
 
-        if (_posts.isEmpty) {
-          return _buildEmptyState();
-        }
+    if (_posts.isEmpty) {
+      return _buildEmptyState();
+    }
 
-        return _buildFeedView(snapshot.connectionState == ConnectionState.waiting);
-      },
-    );
+    return _buildFeedView();
   }
 
   Widget _buildEmptyState() {
@@ -182,7 +203,7 @@ class _FeedScreenState extends State<FeedScreen> {
             ),
             const SizedBox(height: 24),
             TextButton(
-              onPressed: _loadInitialPosts,
+              onPressed: _initializeFeed,
               child: const Text('Retry'),
             ),
           ],
@@ -191,7 +212,7 @@ class _FeedScreenState extends State<FeedScreen> {
     );
   }
 
-  Widget _buildFeedView(bool isLoading) {
+  Widget _buildFeedView() {
     return Scaffold(
       body: ScrollConfiguration(
         behavior: SnappyScrollBehavior(),
@@ -202,30 +223,14 @@ class _FeedScreenState extends State<FeedScreen> {
           physics: const PageScrollPhysics(),
           onPageChanged: (index) {
             if (index >= _posts.length - 3) {
-              _loadMorePosts();
+              // We're near the end, but no need to load more posts
+              // since we have the full list
             }
             _videoPreloadManager.updateCurrentIndex(index, _posts);
-            _setOverlay(false);  // Direct state set, no toggle
+            _setOverlay(false);
           },
-          itemBuilder: (context, index) {
-            if (index >= _posts.length) {
-              return Center(
-                child: isLoading
-                    ? const CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      )
-                    : const Text(
-                        'No more posts',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 16,
-                        ),
-                      ),
-              );
-            }
-            
-            return _buildPostItem(index);
-          },
+          itemCount: _posts.length,  // Set explicit count since we have the full list
+          itemBuilder: (context, index) => _buildPostItem(index),
         ),
       ),
     );
@@ -252,7 +257,6 @@ class _FeedScreenState extends State<FeedScreen> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Video layer (just plays/pauses based on overlay state)
         Container(
           color: Colors.black,
           child: VideoPlayerWidget(
@@ -263,7 +267,6 @@ class _FeedScreenState extends State<FeedScreen> {
           ),
         ),
         
-        // Interactive layer (always present, toggles between transparent and visible)
         GestureDetector(
           onTap: () => _setOverlay(!_showOverlay),
           child: Container(
@@ -280,38 +283,28 @@ class _FeedScreenState extends State<FeedScreen> {
             ),
             child: _showOverlay ? Stack(
               children: [
-                // Menu Button
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 16,
                   right: 16,
-                  child: IconButton(
-                    icon: const Icon(Icons.menu, color: Colors.white, size: 28),
-                    onPressed: () async {
-                      final isLoggedIn = await _authService.isLoggedIn();
-                      if (!isLoggedIn) {
-                        if (!mounted) return;
-                        Navigator.of(context).push(
-                          PageRouteBuilder(
-                            pageBuilder: (context, animation, secondaryAnimation) => 
-                              const LoginScreen(),
-                            transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                              const begin = Offset(1.0, 0.0);
-                              const end = Offset.zero;
-                              const curve = Curves.easeOutExpo;
-                              var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-                              var offsetAnimation = animation.drive(tween);
-                              return SlideTransition(
-                                position: offsetAnimation,
-                                child: child,
-                              );
-                            },
-                            transitionDuration: const Duration(milliseconds: 100),
-                          ),
-                        );
-                        return;
-                      }
-                      await _navigateToProfile();
-                    },
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          _useTagPreferences ? Icons.auto_awesome : Icons.shuffle,
+                          color: Colors.white,
+                        ),
+                        onPressed: _refreshFeed,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.refresh, color: Colors.white),
+                        onPressed: _refreshFeed,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.menu, color: Colors.white, size: 28),
+                        onPressed: () => _navigateToProfile(),
+                      ),
+                    ],
                   ),
                 ),
                 // Creator Info
@@ -319,7 +312,7 @@ class _FeedScreenState extends State<FeedScreen> {
                   left: 16,
                   bottom: MediaQuery.of(context).padding.bottom + 16,
                   child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,  // Make sure profile tap works reliably
+                    behavior: HitTestBehavior.opaque,
                     onTap: () {
                       if (creator['id'] != null) {
                         _navigateToProfile(creator['id'] as String);
@@ -327,7 +320,6 @@ class _FeedScreenState extends State<FeedScreen> {
                     },
                     child: Row(
                       children: [
-                        // Profile Picture
                         Container(
                           width: 40,
                           height: 40,
@@ -350,7 +342,6 @@ class _FeedScreenState extends State<FeedScreen> {
                               : null,
                         ),
                         const SizedBox(width: 12),
-                        // Username
                         Text(
                           '@${creator['username'] ?? 'unknown'}',
                           style: const TextStyle(
@@ -364,7 +355,7 @@ class _FeedScreenState extends State<FeedScreen> {
                   ),
                 ),
               ],
-            ) : null,  // No UI when overlay is "invisible"
+            ) : null,
           ),
         ),
       ],

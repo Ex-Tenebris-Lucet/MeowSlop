@@ -121,7 +121,7 @@ async function analyzeFrames(framePaths) {
     const messageContent = [
         {
             type: "text",
-            text: "Analyze these video frames and generate descriptive tags. If you cannot see any images, please respond with 'NO_IMAGES_VISIBLE'. If you can see the images but they appear corrupted or unclear, respond with 'IMAGES_CORRUPTED'.\n\nIf you can see the images clearly, respond ONLY with relevant comma-separated tags. Tags can be single words or hyphenated phrases describing:\n- Specific actions or activities you see\n- Distinct objects, people, or animals\n- The actual environment and setting\n- Any clear emotions or mood\n- Significant events or changes between frames"
+            text: "Analyze these video frames and generate descriptive tags. If you cannot see any images, please say so.\n\nIf you can see the images clearly, respond ONLY with relevant comma-separated tags. Tags can be single words or hyphenated phrases describing:\n- Specific actions or activities you see\n- Distinct objects, people, or animals\n- The actual environment and setting\n- Any clear emotions or mood\n- Significant events or changes between frames\n\nThe focus of this app is cats, so please be fairly specific about the types of cats, and action words describing cat things"
         },
         ...frameBase64s.map(base64 => ({
             type: "image_url",
