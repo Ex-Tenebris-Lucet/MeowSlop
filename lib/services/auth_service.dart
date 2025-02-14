@@ -414,8 +414,7 @@ class AuthService {
           media_item_tags(
             tags(name)
           )
-        ''')
-        .order('created_at', ascending: false);
+        ''');  // Remove the order clause here since we'll handle ordering in memory
 
       if (response == null) return [];
       
@@ -455,13 +454,22 @@ class AuthService {
                 }
               }
               
+              // If scores are equal, add some randomness
+              if (scoreA == scoreB) {
+                return (DateTime.now().millisecondsSinceEpoch % 2 == 0) ? 1 : -1;
+              }
+              
               return scoreB.compareTo(scoreA);  // Higher scores first
             });
           }
         }
       } else {
-        // For random feed, just shuffle the posts
-        posts.shuffle();
+        // For random feed, do a proper shuffle
+        final random = DateTime.now().millisecondsSinceEpoch;
+        posts.sort((a, b) {
+          // Use the current timestamp as a seed for pseudo-randomness
+          return ((random + a.hashCode) % 2 == 0) ? 1 : -1;
+        });
       }
 
       return posts;

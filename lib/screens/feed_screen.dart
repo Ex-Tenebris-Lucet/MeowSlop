@@ -36,7 +36,7 @@ class _FeedScreenState extends State<FeedScreen> {
   final _videoPreloadManager = VideoPreloadManager();
   List<Map<String, dynamic>> _posts = [];
   bool _isLoading = true;
-  bool _useTagPreferences = false;
+  bool _useTagPreferences = true;
   final _pageController = PageController();
   bool _showOverlay = false;
 
@@ -77,19 +77,44 @@ class _FeedScreenState extends State<FeedScreen> {
 
   Future<void> _refreshFeed() async {
     try {
+      print('Starting feed refresh...');
+      
+      // First, dispose of current video preload cache
+      _videoPreloadManager.dispose();
+      
+      // Show loading state
+      setState(() => _isLoading = true);
+      
+      // Get fresh posts
       final posts = await _authService.getFullFeedList(
         useTagPreferences: _useTagPreferences
       );
       
       if (!mounted) return;
-      setState(() => _posts = posts);
 
+      // Reset page controller to top
+      await _pageController.animateToPage(
+        0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+      
+      setState(() {
+        _posts = posts;
+        _isLoading = false;
+        _showOverlay = false;  // Reset overlay state too
+      });
+
+      // Initialize fresh video preload manager
       if (_posts.isNotEmpty) {
         _videoPreloadManager.updateCurrentIndex(0, _posts);
       }
+      
+      print('Feed refresh complete with ${posts.length} posts');
     } catch (e) {
       print('Error refreshing feed: $e');
       if (mounted) {
+        setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error refreshing feed: ${e.toString()}')),
         );
@@ -294,7 +319,20 @@ class _FeedScreenState extends State<FeedScreen> {
                           _useTagPreferences ? Icons.auto_awesome : Icons.shuffle,
                           color: Colors.white,
                         ),
-                        onPressed: _refreshFeed,
+                        onPressed: () async {
+                          final isLoggedIn = await _authService.isLoggedIn();
+                          if (!isLoggedIn) {
+                            if (!mounted) return;
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (context) => const LoginScreen()),
+                            );
+                            return;
+                          }
+                          setState(() {
+                            _useTagPreferences = !_useTagPreferences;
+                          });
+                          _refreshFeed();
+                        },
                       ),
                       IconButton(
                         icon: const Icon(Icons.refresh, color: Colors.white),
