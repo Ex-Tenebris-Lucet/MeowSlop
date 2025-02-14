@@ -92,17 +92,18 @@ class _FeedScreenState extends State<FeedScreen> {
       
       if (!mounted) return;
 
-      // Reset page controller to top
-      await _pageController.animateToPage(
-        0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-      
+      // Update state first
       setState(() {
         _posts = posts;
         _isLoading = false;
         _showOverlay = false;  // Reset overlay state too
+      });
+
+      // Wait a frame to ensure PageView is built
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_pageController.hasClients) {
+          _pageController.jumpToPage(0);
+        }
       });
 
       // Initialize fresh video preload manager

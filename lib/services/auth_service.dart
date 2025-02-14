@@ -414,7 +414,7 @@ class AuthService {
           media_item_tags(
             tags(name)
           )
-        ''');  // Remove the order clause here since we'll handle ordering in memory
+        '''); 
 
       if (response == null) return [];
       
